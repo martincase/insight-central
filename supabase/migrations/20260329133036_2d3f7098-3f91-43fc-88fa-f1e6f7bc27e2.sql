@@ -1,0 +1,1 @@
+ALTER TABLE vendor_inventory_data ADD COLUMN IF NOT EXISTS product_title TEXT;

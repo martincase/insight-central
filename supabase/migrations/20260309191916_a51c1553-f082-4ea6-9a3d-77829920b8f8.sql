@@ -1,0 +1,1 @@
+ALTER TABLE public.jungle_scout_research_sessions ADD COLUMN IF NOT EXISTS product_asin text;

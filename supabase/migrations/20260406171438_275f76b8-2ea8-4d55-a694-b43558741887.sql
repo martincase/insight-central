@@ -1,0 +1,1 @@
+SELECT MAX(record_date) AS max_record_date, MIN(record_date) AS min_record_date, COUNT(*) AS row_count FROM public.daily_asin_data WHERE merchant_token = 'A3K5KN6RHD3NG3-GB';

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Trigger Inventory Sync</title>
+</head>
+<body>
+    <h1>Inventory Sync Test</h1>
+    <button id="syncBtn">Trigger Sync</button>
+    <pre id="result"></pre>
+    
+    <script>
+        document.getElementById('syncBtn').onclick = async () => {
+            const resultEl = document.getElementById('result');
+            resultEl.textContent = 'Syncing...';
+            
+            try {
+                const response = await fetch('https://wgrephgnrldsyipbvjco.supabase.co/functions/v1/daily-inventory-sync', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndncmVwaGducmxkc3lpcGJ2amNvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTUzMzQwNTQsImV4cCI6MjA3MDkxMDA1NH0.09lGFOFoZtFjriGjFankGZ2qcXJjWpydQTn1jyMyUpo',
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const result = await response.json();
+                resultEl.textContent = JSON.stringify(result, null, 2);
+                
+                // Check database after sync
+                setTimeout(async () => {
+                    const checkResponse = await fetch('https://wgrephgnrldsyipbvjco.supabase.co/rest/v1/rpc/check_clcr_status', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndncmVwaGducmxkc3lpcGJ2amNvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTUzMzQwNTQsImV4cCI6MjA3MDkxMDA1NH0.09lGFOFoZtFjriGjFankGZ2qcXJjWpydQTn1jyMyUpo',
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                }, 2000);
+                
+            } catch (error) {
+                resultEl.textContent = 'Error: ' + error.message;
+            }
+        };
+    </script>
+</body>
+</html>

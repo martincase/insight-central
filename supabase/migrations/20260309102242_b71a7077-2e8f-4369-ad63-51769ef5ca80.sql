@@ -1,0 +1,2 @@
+ALTER TABLE public.account_tags DROP CONSTRAINT account_tags_tag_check;
+ALTER TABLE public.account_tags ADD CONSTRAINT account_tags_tag_check CHECK (tag IN ('ramp_up', 'under_performing', 'new_product_launch', 'seasonal_peak'));

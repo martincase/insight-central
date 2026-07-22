@@ -1,0 +1,118 @@
+project_id = "wgrephgnrldsyipbvjco"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+enabled = true
+port = 54322
+shadow_port = 54320
+major_version = 15
+
+[db.pooler]
+enabled = false
+port = 54329
+pool_mode = "transaction"
+default_pool_size = 20
+max_client_conn = 100
+
+[realtime]
+enabled = true
+port = 54323
+ip_version = "ipv4"
+
+[studio]
+enabled = true
+port = 54324
+api_port = 54321
+
+[inbucket]
+enabled = true
+port = 54325
+smtp_port = 54326
+pop3_port = 54327
+
+[storage]
+enabled = true
+port = 54328
+file_size_limit = "50MiB"
+image_transformation = { enabled = true }
+
+[auth]
+enabled = true
+port = 54329
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["https://localhost:3000"]
+jwt_expiry = 3600
+enable_signup = true
+enable_anonymous_sign_ins = false
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = true
+enable_confirmations = false
+template_path = "./supabase/templates"
+
+[functions.daily-inventory-sync]
+verify_jwt = false
+
+[functions.weekly-backup]
+verify_jwt = false
+
+[functions.weekly-comprehensive-sync]
+verify_jwt = false
+
+[functions.data-gap-detection]
+verify_jwt = false
+
+[functions.performance-anomaly-detection]
+verify_jwt = false
+
+[functions.send-alert-notifications]
+verify_jwt = false
+
+[functions.send-test-email]
+verify_jwt = false
+
+[functions.add-roadmap-item]
+verify_jwt = false
+
+[functions.daily-accounts-sync]
+verify_jwt = false
+
+[functions.daily-sales-ppc-sync]
+verify_jwt = false
+
+[functions.daily-asin-sync]
+verify_jwt = false
+
+[functions.daily-campaign-sync]
+verify_jwt = false
+
+[functions.daily-vendor-sync]
+verify_jwt = false
+
+[functions.client-threshold-check]
+verify_jwt = false
+
+[functions.send-client-alerts]
+verify_jwt = false
+
+[functions.send-sample-client-alert]
+verify_jwt = false
+
+[functions.daily-ppc-sync]
+verify_jwt = false
+
+[functions.ai-analyst]
+verify_jwt = false
+
+[functions.ppc-gap-analysis]
+verify_jwt = false
+
+[functions.jungle-scout-keywords-by-keyword]
+verify_jwt = false

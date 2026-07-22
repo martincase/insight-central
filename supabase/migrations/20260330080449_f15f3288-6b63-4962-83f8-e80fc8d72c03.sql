@@ -1,0 +1,2 @@
+ALTER TABLE public.accounts_master ADD COLUMN IF NOT EXISTS share_code text;
+CREATE UNIQUE INDEX IF NOT EXISTS accounts_master_share_code_unique ON public.accounts_master (share_code) WHERE share_code IS NOT NULL;

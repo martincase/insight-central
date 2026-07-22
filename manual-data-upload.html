@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Manual Data Upload to daily_sales_ppc_data</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .upload-section { margin: 20px 0; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
+        textarea { width: 100%; height: 200px; margin: 10px 0; }
+        button { padding: 10px 20px; margin: 5px; background: #007bff; color: white; border: none; border-radius: 3px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        .progress { margin: 10px 0; }
+        .log { background: #f8f9fa; padding: 10px; margin: 10px 0; border-radius: 3px; height: 300px; overflow-y: auto; font-family: monospace; }
+        .error { color: red; }
+        .success { color: green; }
+        .info { color: blue; }
+        table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Manual Data Upload to daily_sales_ppc_data</h1>
+        
+        <div class="upload-section">
+            <h3>Upload Methods</h3>
+            <button onclick="fetchFromGoogleSheets()">Fetch from Google Sheets (Daily Sales + PPC)</button>
+            <button onclick="showCSVUpload()">Upload CSV Data</button>
+            <button onclick="showJSONUpload()">Upload JSON Data</button>
+            <button onclick="clearDatabase()">Clear All Data</button>
+        </div>
+
+        <div class="upload-section">
+            <h3>Conflict Resolution</h3>
+            <p>How to handle records with the same date + merchant_token:</p>
+            <label><input type="radio" name="conflictMode" value="insert" checked> Insert Only (fail on duplicates)</label><br>
+            <label><input type="radio" name="conflictMode" value="upsert"> Upsert (insert new, update existing)</label><br>
+            <label><input type="radio" name="conflictMode" value="skip"> Skip duplicates (keep existing data)</label><br>
+            <label><input type="checkbox" id="showPreview" checked> Show data preview before upload</label>
+        </div>
+
+        <div class="upload-section" id="csvUpload" style="display: none;">
+            <h3>CSV Upload</h3>
+            <p>Paste CSV data with headers: record_date,merchant_token,account_name,sales,units_ordered,page_views,buy_box_percentage,conversion_rate</p>
+            <textarea id="csvData" placeholder="2025-08-30,A3KFXD5036MA8L-GB,Lockabox,1000,10,500,95.5,2.5"></textarea>
+            <button onclick="uploadCSV()">Upload CSV Data</button>
+        </div>
+
+        <div class="upload-section" id="jsonUpload" style="display: none;">
+            <h3>JSON Upload</h3>
+            <p>Paste JSON array of objects:</p>
+            <textarea id="jsonData" placeholder='[{"record_date":"2025-08-30","merchant_token":"A3KFXD5036MA8L-GB","account_name":"Lockabox","sales":1000,"units_ordered":10}]'></textarea>
+            <button onclick="uploadJSON()">Upload JSON Data</button>
+        </div>
+
+        <div class="upload-section">
+            <h3>Progress</h3>
+            <div class="progress">
+                <div id="progressBar" style="width: 0%; height: 20px; background: #28a745; border-radius: 3px;"></div>
+            </div>
+            <div id="progressText">Ready</div>
+        </div>
+
+        <div class="upload-section">
+            <h3>Current Database Stats</h3>
+            <button onclick="refreshStats()">Refresh Stats</button>
+            <div id="stats">Loading...</div>
+        </div>
+
+        <div class="upload-section">
+            <h3>Upload Log</h3>
+            <div id="uploadLog" class="log">Ready to upload data...</div>
+        </div>
+    </div>
+
+    <script>
+        const SUPABASE_URL = 'https://wgrephgnrldsyipbvjco.supabase.co';
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndncmVwaGducmxkc3lpcGJ2amNvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTUzMzQwNTQsImV4cCI6MjA3MDkxMDA1NH0.09lGFOFoZtFjriGjFankGZ2qcXJjWpydQTn1jyMyUpo';
+        const BATCH_SIZE = 500;
+
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('uploadLog');
+            const timestamp = new Date().toLocaleTimeString();
+            const className = type === 'error' ? 'error' : type === 'success' ? 'success' : 'info';
+            logDiv.innerHTML += `<div class="${className}">[${timestamp}] ${message}</div>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+            console.log(`[${type}] ${message}`);
+        }
+
+        function updateProgress(current, total, text) {
+            const percentage = total > 0 ? (current / total) * 100 : 0;
+            document.getElementById('progressBar').style.width = percentage + '%';
+            document.getElementById('progressText').textContent = text || `${current}/${total} (${percentage.toFixed(1)}%)`;
+        }
+
+        async function supabaseRequest(endpoint, options = {}) {
+            const response = await fetch(`${SUPABASE_URL}/rest/v1/${endpoint}`, {
+                headers: {
+                    'apikey': SUPABASE_ANON_KEY,
+                    'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+                    'Content-Type': 'application/json',
+                    'Prefer': 'return=minimal',
+                    ...options.headers
+                },
+                ...options
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`HTTP ${response.status}: ${errorText}`);
+            }
+
+            return response.json().catch(() => ({}));
+        }
+
+        async function refreshStats() {
+            try {
+                log('Fetching database statistics...', 'info');
+                
+                const countResponse = await supabaseRequest('daily_sales_ppc_data?select=count');
+                const count = countResponse[0]?.count || 0;
+
+                const dateRangeResponse = await supabaseRequest('daily_sales_ppc_data?select=record_date&order=record_date.asc.nullslast&limit=1');
+                const minDate = dateRangeResponse[0]?.record_date || 'No data';
+
+                const maxDateResponse = await supabaseRequest('daily_sales_ppc_data?select=record_date&order=record_date.desc.nullslast&limit=1');
+                const maxDate = maxDateResponse[0]?.record_date || 'No data';
+
+                const accountsResponse = await supabaseRequest('daily_sales_ppc_data?select=merchant_token&limit=1000');
+                const uniqueAccounts = new Set(accountsResponse.map(r => r.merchant_token)).size;
+
+                document.getElementById('stats').innerHTML = `
+                    <table>
+                        <tr><th>Total Records</th><td>${count}</td></tr>
+                        <tr><th>Date Range</th><td>${minDate} to ${maxDate}</td></tr>
+                        <tr><th>Unique Accounts</th><td>${uniqueAccounts}</td></tr>
+                    </table>
+                `;
+                
+                log(`Stats refreshed: ${count} records, ${uniqueAccounts} unique accounts`, 'success');
+            } catch (error) {
+                log(`Error fetching stats: ${error.message}`, 'error');
+                document.getElementById('stats').innerHTML = '<p class="error">Error loading stats</p>';
+            }
+        }
+
+        async function uploadBatch(records, conflictMode = 'insert') {
+            const processedRecords = records.map(record => ({
+                record_date: record.record_date,
+                merchant_token: record.merchant_token || '',
+                account_name: record.account_name || null,
+                sales: record.sales ? parseFloat(record.sales) : null,
+                units_ordered: record.units_ordered ? parseFloat(record.units_ordered) : null,
+                page_views: record.page_views ? parseFloat(record.page_views) : null,
+                buy_box_percentage: record.buy_box_percentage ? parseFloat(record.buy_box_percentage) : null,
+                conversion_rate: record.conversion_rate ? parseFloat(record.conversion_rate) : null,
+                created_at: new Date().toISOString(),
+                last_synced_at: new Date().toISOString()
+            }));
+
+            let headers = {
+                'apikey': SUPABASE_ANON_KEY,
+                'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+                'Content-Type': 'application/json'
+            };
+
+            if (conflictMode === 'upsert') {
+                headers['Prefer'] = 'resolution=merge-duplicates';
+            } else if (conflictMode === 'skip') {
+                headers['Prefer'] = 'resolution=ignore-duplicates';
+            } else {
+                headers['Prefer'] = 'return=minimal';
+            }
+
+            await supabaseRequest('daily_sales_ppc_data', {
+                method: 'POST',
+                headers: headers,
+                body: JSON.stringify(processedRecords)
+            });
+        }
+
+        function getConflictMode() {
+            const radios = document.querySelectorAll('input[name="conflictMode"]');
+            for (const radio of radios) {
+                if (radio.checked) return radio.value;
+            }
+            return 'insert';
+        }
+
+        async function checkExistingRecords(records) {
+            try {
+                const dateTokenPairs = records.map(r => `(record_date.eq.${r.record_date},merchant_token.eq.${r.merchant_token})`);
+                const queryString = dateTokenPairs.join(',');
+                
+                // Split into smaller chunks if too many records
+                const chunkSize = 50;
+                let existingRecords = [];
+                
+                for (let i = 0; i < dateTokenPairs.length; i += chunkSize) {
+                    const chunk = dateTokenPairs.slice(i, i + chunkSize);
+                    const chunkQuery = chunk.join(',');
+                    const response = await supabaseRequest(`daily_sales_ppc_data?or=(${chunkQuery})&select=record_date,merchant_token,sales,units_ordered`);
+                    existingRecords = existingRecords.concat(response || []);
+                }
+
+                return existingRecords;
+            } catch (error) {
+                log(`Error checking existing records: ${error.message}`, 'error');
+                return [];
+            }
+        }
+
+        async function showDataPreview(records) {
+            const conflictMode = getConflictMode();
+            
+            if (conflictMode === 'insert') {
+                log(`Preview: Will attempt to INSERT ${records.length} new records`, 'info');
+                return true;
+            }
+
+            log('Checking for existing records...', 'info');
+            const existingRecords = await checkExistingRecords(records);
+            const existingKeys = new Set(existingRecords.map(r => `${r.record_date}|${r.merchant_token}`));
+            
+            const newRecords = records.filter(r => !existingKeys.has(`${r.record_date}|${r.merchant_token}`));
+            const updateRecords = records.filter(r => existingKeys.has(`${r.record_date}|${r.merchant_token}`));
+
+            log(`Preview (${conflictMode} mode):`, 'info');
+            log(`- ${newRecords.length} new records will be inserted`, 'info');
+            log(`- ${updateRecords.length} existing records will be ${conflictMode === 'upsert' ? 'updated' : 'skipped'}`, 'info');
+
+            if (updateRecords.length > 0) {
+                log(`Existing records that will be affected:`, 'info');
+                updateRecords.slice(0, 5).forEach((record, i) => {
+                    log(`  ${i+1}. ${record.record_date} | ${record.merchant_token} | Sales: ${record.sales}`, 'info');
+                });
+                if (updateRecords.length > 5) {
+                    log(`  ... and ${updateRecords.length - 5} more`, 'info');
+                }
+            }
+
+            return confirm(`Continue with ${conflictMode} operation?\n\n${newRecords.length} new records\n${updateRecords.length} existing records to ${conflictMode === 'upsert' ? 'update' : 'skip'}`);
+        }
+
+        async function uploadData(records) {
+            console.log('uploadData called with:', records);
+            log(`Received ${Array.isArray(records) ? records.length : 'non-array'} records for processing`, 'info');
+            
+            if (!Array.isArray(records)) {
+                log(`Error: Expected array, got ${typeof records}`, 'error');
+                return;
+            }
+            
+            if (records.length === 0) {
+                log('No valid records to upload - array is empty', 'error');
+                return;
+            }
+            
+            // Log sample of first few records for debugging
+            log(`Sample records (first 3):`, 'info');
+            records.slice(0, 3).forEach((record, i) => {
+                log(`  Record ${i+1}: ${JSON.stringify(record)}`, 'info');
+            });
+
+            const conflictMode = getConflictMode();
+            const showPreview = document.getElementById('showPreview').checked;
+
+            // Show preview and get confirmation if enabled
+            if (showPreview) {
+                const shouldContinue = await showDataPreview(records);
+                if (!shouldContinue) {
+                    log('Upload cancelled by user', 'info');
+                    return;
+                }
+            }
+
+            log(`Starting ${conflictMode} upload of ${records.length} records in batches of ${BATCH_SIZE}`, 'info');
+            
+            let uploaded = 0;
+            const totalBatches = Math.ceil(records.length / BATCH_SIZE);
+
+            try {
+                for (let i = 0; i < records.length; i += BATCH_SIZE) {
+                    const batch = records.slice(i, i + BATCH_SIZE);
+                    const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+                    
+                    log(`Uploading batch ${batchNum}/${totalBatches} (${batch.length} records) - ${conflictMode} mode`, 'info');
+                    updateProgress(batchNum - 1, totalBatches, `Batch ${batchNum}/${totalBatches}`);
+                    
+                    await uploadBatch(batch, conflictMode);
+                    uploaded += batch.length;
+                    
+                    // Small delay to prevent overwhelming the database
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+
+                updateProgress(totalBatches, totalBatches, 'Complete');
+                log(`Successfully processed ${uploaded} records using ${conflictMode} mode`, 'success');
+                await refreshStats();
+                
+            } catch (error) {
+                log(`Upload failed after ${uploaded} records: ${error.message}`, 'error');
+                log(`Tip: If you're seeing duplicate key errors, try using "Upsert" or "Skip duplicates" mode`, 'info');
+                throw error;
+            }
+        }
+
+        function showCSVUpload() {
+            document.getElementById('csvUpload').style.display = 'block';
+            document.getElementById('jsonUpload').style.display = 'none';
+        }
+
+        function showJSONUpload() {
+            document.getElementById('csvUpload').style.display = 'none';
+            document.getElementById('jsonUpload').style.display = 'block';
+        }
+
+        async function uploadCSV() {
+            const csvData = document.getElementById('csvData').value.trim();
+            console.log('Raw CSV data:', csvData);
+            log(`Raw CSV input length: ${csvData.length} characters`, 'info');
+            
+            if (!csvData) {
+                log('Please enter CSV data', 'error');
+                return;
+            }
+
+            try {
+                const lines = csvData.split('\n');
+                log(`Split into ${lines.length} lines`, 'info');
+                console.log('Lines:', lines);
+                
+                const headers = lines[0].split(',').map(h => h.trim());
+                log(`Processing CSV with headers: ${headers.join(', ')}`, 'info');
+                
+                const records = [];
+                for (let i = 1; i < lines.length; i++) {
+                    const lineContent = lines[i].trim();
+                    log(`Processing line ${i}: "${lineContent}"`, 'info');
+                    
+                    if (lineContent) {
+                        const values = lineContent.split(',').map(v => v.trim());
+                        log(`Split into values: [${values.join(', ')}]`, 'info');
+                        
+                        const record = {};
+                        headers.forEach((header, index) => {
+                            record[header] = values[index] || null;
+                        });
+                        log(`Created record: ${JSON.stringify(record)}`, 'info');
+                        records.push(record);
+                    }
+                }
+
+                log(`Final parsed records: ${records.length}`, 'info');
+                console.log('Parsed records:', records);
+                await uploadData(records);
+                
+            } catch (error) {
+                log(`CSV upload error: ${error.message}`, 'error');
+            }
+        }
+
+        async function uploadJSON() {
+            const jsonData = document.getElementById('jsonData').value.trim();
+            console.log('Raw JSON data:', jsonData);
+            log(`Raw JSON input length: ${jsonData.length} characters`, 'info');
+            
+            if (!jsonData) {
+                log('Please enter JSON data', 'error');
+                return;
+            }
+
+            try {
+                const records = JSON.parse(jsonData);
+                console.log('Parsed JSON:', records);
+                log(`Parsed ${Array.isArray(records) ? records.length : 'non-array'} JSON records`, 'info');
+                await uploadData(records);
+                
+            } catch (error) {
+                log(`JSON upload error: ${error.message}`, 'error');
+            }
+        }
+
+        async function fetchFromGoogleSheets() {
+            log('Fetching data from Google Sheets...', 'info');
+            
+            try {
+                const GOOGLE_API_KEY = 'AIzaSyCf2NPXyVeLvps381T8pLRLtCIWeS9pqXc';
+                const SHEET_ID = '13-pewA0YYvZpJkVfXiJcUVAXOx-6LCBHdXV3Wb2wGrw';
+                
+                // Fetch sales data
+                const salesResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/Daily Sales!A:Z?key=${GOOGLE_API_KEY}`);
+                const salesData = await salesResponse.json();
+                
+                // Fetch PPC data
+                const ppcResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/Daily PPC V2!A:Z?key=${GOOGLE_API_KEY}`);
+                const ppcData = await ppcResponse.json();
+                
+                log(`Fetched ${salesData.values?.length || 0} sales rows and ${ppcData.values?.length || 0} PPC rows`, 'info');
+                
+                // Process and combine the data
+                const records = [];
+                
+                // Process sales data
+                if (salesData.values && salesData.values.length > 1) {
+                    const salesHeaders = salesData.values[0];
+                    const dateIndex = salesHeaders.findIndex(h => h.toLowerCase().includes('date'));
+                    const accountIndex = salesHeaders.findIndex(h => h.includes('account_name') || h.includes('account_id'));
+                    const salesIndex = salesHeaders.findIndex(h => h.includes('orderedproductsales_amount'));
+                    const unitsIndex = salesHeaders.findIndex(h => h.includes('unitsordered'));
+                    const pageViewsIndex = salesHeaders.findIndex(h => h.includes('browserpageviews'));
+                    const buyBoxIndex = salesHeaders.findIndex(h => h.includes('buyboxpercentage'));
+                    const conversionIndex = salesHeaders.findIndex(h => h.includes('unitsessionpercentage'));
+                    
+                    for (let i = 1; i < salesData.values.length; i++) {
+                        const row = salesData.values[i];
+                        if (row[dateIndex] && row[accountIndex]) {
+                            records.push({
+                                record_date: row[dateIndex],
+                                merchant_token: row[accountIndex],
+                                account_name: row[accountIndex],
+                                sales: row[salesIndex] || null,
+                                units_ordered: row[unitsIndex] || null,
+                                page_views: row[pageViewsIndex] || null,
+                                buy_box_percentage: row[buyBoxIndex] || null,
+                                conversion_rate: row[conversionIndex] || null
+                            });
+                        }
+                    }
+                }
+                
+                log(`Processed ${records.length} records from Google Sheets`, 'info');
+                
+                if (records.length > 0) {
+                    await uploadData(records);
+                } else {
+                    log('No valid records found in Google Sheets data', 'error');
+                }
+                
+            } catch (error) {
+                log(`Google Sheets fetch error: ${error.message}`, 'error');
+            }
+        }
+
+        async function clearDatabase() {
+            if (!confirm('Are you sure you want to delete ALL data from daily_sales_ppc_data? This cannot be undone!')) {
+                return;
+            }
+            
+            try {
+                log('Clearing all data from daily_sales_ppc_data...', 'info');
+                await supabaseRequest('daily_sales_ppc_data', {
+                    method: 'DELETE',
+                    headers: {
+                        'Prefer': 'return=minimal'
+                    }
+                });
+                
+                log('All data cleared successfully', 'success');
+                await refreshStats();
+                
+            } catch (error) {
+                log(`Error clearing data: ${error.message}`, 'error');
+            }
+        }
+
+        // Initialize page
+        window.onload = function() {
+            refreshStats();
+        };
+    </script>
+</body>
+</html>

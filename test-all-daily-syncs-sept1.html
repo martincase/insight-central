@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test All Daily Syncs for Sept 1</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        button { margin: 10px; padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        .result { margin: 20px 0; padding: 15px; border: 1px solid #ddd; background: #f9f9f9; }
+        .success { border-color: #28a745; background: #d4edda; }
+        .error { border-color: #dc3545; background: #f8d7da; }
+        pre { white-space: pre-wrap; word-wrap: break-word; }
+    </style>
+</head>
+<body>
+    <h1>Testing All Daily Syncs for September 1st</h1>
+    
+    <button onclick="triggerAllSyncs()">🔄 Trigger All Daily Syncs</button>
+    <button onclick="triggerSync('daily-accounts-sync')">👥 Accounts</button>
+    <button onclick="triggerSync('daily-sales-ppc-sync')">💰 Sales/PPC</button>
+    <button onclick="triggerSync('daily-asin-sync')">📦 ASINs</button>
+    <button onclick="triggerSync('daily-campaign-sync')">📊 Campaigns</button>
+    <button onclick="triggerSync('daily-vendor-sync')">🏪 Vendor</button>
+    <button onclick="triggerSync('daily-inventory-sync')">📋 Inventory</button>
+    
+    <div id="results"></div>
+
+    <script>
+        const baseUrl = 'https://wgrephgnrldsyipbvjco.supabase.co/functions/v1/';
+        const authToken = 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndncmVwaGducmxkc3lpcGJ2amNvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTUzMzQwNTQsImV4cCI6MjA3MDkxMDA1NH0.09lGFOFoZtFjriGjFankGZ2qcXJjWpydQTn1jyMyUpo';
+        
+        const syncFunctions = [
+            'daily-accounts-sync',
+            'daily-sales-ppc-sync', 
+            'daily-asin-sync',
+            'daily-campaign-sync',
+            'daily-vendor-sync',
+            'daily-inventory-sync'
+        ];
+
+        async function triggerSync(functionName) {
+            const resultsDiv = document.getElementById('results');
+            const resultDiv = document.createElement('div');
+            resultDiv.className = 'result';
+            resultDiv.innerHTML = `<h3>${functionName}</h3><p>⏳ Running...</p>`;
+            resultsDiv.appendChild(resultDiv);
+            
+            try {
+                const startTime = Date.now();
+                const response = await fetch(baseUrl + functionName, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': authToken
+                    },
+                    body: JSON.stringify({})
+                });
+                
+                const result = await response.json();
+                const duration = Date.now() - startTime;
+                
+                resultDiv.className = response.ok ? 'result success' : 'result error';
+                resultDiv.innerHTML = `
+                    <h3>${functionName} ${response.ok ? '✅' : '❌'}</h3>
+                    <p><strong>Duration:</strong> ${duration}ms</p>
+                    <p><strong>Status:</strong> ${response.status}</p>
+                    <pre>${JSON.stringify(result, null, 2)}</pre>
+                `;
+            } catch (error) {
+                resultDiv.className = 'result error';
+                resultDiv.innerHTML = `
+                    <h3>${functionName} ❌</h3>
+                    <p><strong>Error:</strong> ${error.message}</p>
+                `;
+            }
+        }
+
+        async function triggerAllSyncs() {
+            document.getElementById('results').innerHTML = '<h2>🚀 Starting all daily syncs...</h2>';
+            
+            for (const functionName of syncFunctions) {
+                await triggerSync(functionName);
+                // Small delay between functions
+                await new Promise(resolve => setTimeout(resolve, 2000));
+            }
+        }
+    </script>
+</body>
+</html>

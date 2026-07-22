@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 810 540">
+  <rect width="810" height="540" fill="#003399"/>
+  <symbol id="s" overflow="visible"><polygon fill="#FFCC00" points="0,-30 6.74,-9.27 28.53,-9.27 10.90,3.54 17.63,24.27 0,11.46 -17.63,24.27 -10.90,3.54 -28.53,-9.27 -6.74,-9.27"/></symbol>
+  <use href="#s" x="405" y="90"/>
+  <use href="#s" x="495" y="114.12"/>
+  <use href="#s" x="560.88" y="180"/>
+  <use href="#s" x="585" y="270"/>
+  <use href="#s" x="560.88" y="360"/>
+  <use href="#s" x="495" y="425.88"/>
+  <use href="#s" x="405" y="450"/>
+  <use href="#s" x="315" y="425.88"/>
+  <use href="#s" x="249.12" y="360"/>
+  <use href="#s" x="225" y="270"/>
+  <use href="#s" x="249.12" y="180"/>
+  <use href="#s" x="315" y="114.12"/>
+</svg>
