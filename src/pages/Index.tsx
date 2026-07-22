@@ -210,7 +210,6 @@ const Index = () => {
     return saved === "true";
   });
   const [hybridDataStatus, setHybridDataStatus] = useState<HybridDataStatus | undefined>();
-  const [showAISuggestionsSection, setShowAISuggestionsSection] = useState(false);
   const [overviewSearch, setOverviewSearch] = useState("");
   const [overviewSort, setOverviewSort] = useState<OverviewSortConfig>({ key: 'sales', direction: 'desc' });
   const [overviewAttentionOnly, setOverviewAttentionOnly] = useState(false);
@@ -1822,33 +1821,6 @@ const Index = () => {
               {/* PERFORMANCE TAB - Overview */}
               {focusTab === "performance" && (
                 <div className="space-y-8">
-                  {/* AI Suggestions Box */}
-                  {accounts.length > 0 && (
-                    <div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setShowAISuggestionsSection(!showAISuggestionsSection)}
-                        className="mb-4 flex items-center gap-2"
-                      >
-                        {showAISuggestionsSection ? (
-                          <ChevronDown className="h-4 w-4" />
-                        ) : (
-                          <ChevronRight className="h-4 w-4" />
-                        )}
-                        {showAISuggestionsSection ? "Collapse" : "Expand"} AI Suggestions
-                      </Button>
-
-                      {showAISuggestionsSection && (
-                        <AISuggestions
-                          accounts={accounts}
-                          isBlurred={isAccountNamesBlurred}
-                          onFocusAccount={handleFocusAccount}
-                        />
-                      )}
-                    </div>
-                  )}
-
                   {/* Settings / Data Source Configuration — collapsed into popover */}
                   <div className="flex justify-end">
                     <Popover>
