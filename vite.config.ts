@@ -9,6 +9,19 @@ export default defineConfig(() => ({
     port: 8080,
   },
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      output: {
+        // Split the big shared dependencies out of the entry chunk so they cache
+        // independently and the browser can fetch them in parallel.
+        manualChunks: {
+          react: ["react", "react-dom", "react-router-dom"],
+          supabase: ["@supabase/supabase-js"],
+          charts: ["recharts"],
+        },
+      },
+    },
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
