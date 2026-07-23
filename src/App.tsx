@@ -18,6 +18,7 @@ const DemoView = React.lazy(() => import("./pages/DemoView"));
 const ASINHub = React.lazy(() => import("./pages/ASINHub"));
 const AgencyView = React.lazy(() => import("./pages/AgencyView"));
 const FeedbackAdmin = React.lazy(() => import("./pages/FeedbackAdmin"));
+const ListingImages = React.lazy(() => import("./pages/ListingImages"));
 
 const NotFound = React.lazy(() => import("./pages/NotFound"));
 
@@ -43,6 +44,7 @@ const App = () => (
             <Route path="/asin/:asin" element={<ASINHub />} />
             <Route path="/agency" element={<AgencyView />} />
             <Route path="/feedback" element={<FeedbackAdmin />} />
+            <Route path="/listing-images" element={<ListingImages />} />
             
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
