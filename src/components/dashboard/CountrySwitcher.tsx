@@ -44,7 +44,9 @@ export function CountrySwitcher({ countries, scope, onChange, className }: Count
             className={cn(
               'flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs md:text-sm font-medium transition-all whitespace-nowrap',
               active
-                ? 'bg-gradient-to-r from-blue-600 to-cyan-500 text-white shadow-sm'
+                // Selected-market pill: cyan-500 gave white text only 2.43:1.
+                // cyan-700 measures 5.36:1 and keeps the same blue→cyan identity.
+                ? 'bg-gradient-to-r from-blue-700 to-cyan-700 text-white shadow-sm'
                 : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900',
             )}
           >

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
-import { format, subDays } from 'date-fns';
-import { useParams } from 'react-router-dom';
+import { format, subDays, endOfMonth } from 'date-fns';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { useApiPpcData, type AdType } from '@/hooks/useApiPpcData';
 import { calculatePeriodData, getCurrentDateRange, getPreviousDateRange } from '@/utils/dataProcessor';
 import { AccountData, DateFilter, ASINData, InventoryData } from '@/types/dashboard';
@@ -63,8 +63,108 @@ import { SalesTrendCard } from '@/components/dashboard/SalesTrendCard';
 
 import { SalesDriversTab } from '@/components/dashboard/SalesDriversTab';
 import { CountryScopedPerformance } from '@/components/dashboard/CountryScopedPerformance';
+import { ReportingBasisNote } from '@/components/dashboard/ReportingBasisNote';
 
 type ClientTab = 'performance' | 'sales-drivers' | 'search-terms' | 'advertised-products' | 'brand-analytics' | 'profit-loss' | 'budgets' | 'inventory-planner';
+
+/* ------------------------------------------------------------------------- *
+ * Reporting-period deep links
+ *
+ * The month-end client email links straight to the period it reports on, so the
+ * client lands on the number they have just read rather than a rolling window.
+ *
+ *   ?month=YYYY-MM                     e.g. /cottam/IJ92T?month=2026-07
+ *   ?from=YYYY-MM-DD&to=YYYY-MM-DD     e.g. /cottam/IJ92T?from=2026-07-01&to=2026-07-31
+ *
+ * `month` wins when both are supplied. Anything missing or malformed is ignored
+ * and the dashboard falls back to its normal default window — a bad parameter
+ * must never break the page. Once loaded the client can still change the range
+ * with the date picker; the "as reported in your monthly email" note simply
+ * disappears when they do.
+ * ------------------------------------------------------------------------- */
+
+export interface DeepLinkPeriod {
+  kind: 'month' | 'range';
+  from: Date;
+  to: Date;
+  /** Human label used in the on-screen echo, e.g. "July 2026". */
+  label: string;
+}
+
+const MONTH_PARAM_PATTERN = /^(\d{4})-(\d{2})$/;
+const DATE_PARAM_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** Build a local midnight Date, rejecting impossible dates like 2026-02-31. */
+const buildLocalDate = (year: number, month: number, day: number): Date | null => {
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) return null;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const dt = new Date(year, month - 1, day);
+  dt.setHours(0, 0, 0, 0);
+  if (dt.getFullYear() !== year || dt.getMonth() !== month - 1 || dt.getDate() !== day) return null;
+  return dt;
+};
+
+export const parsePeriodFromSearch = (search: URLSearchParams | null | undefined): DeepLinkPeriod | null => {
+  if (!search) return null;
+  try {
+    const monthRaw = search.get('month');
+    if (monthRaw !== null) {
+      const m = MONTH_PARAM_PATTERN.exec(monthRaw.trim());
+      if (!m) return null; // malformed → ignore, keep the default window
+      const from = buildLocalDate(Number(m[1]), Number(m[2]), 1);
+      if (!from) return null;
+      return { kind: 'month', from, to: endOfMonth(from), label: format(from, 'MMMM yyyy') };
+    }
+
+    const fromRaw = search.get('from');
+    const toRaw = search.get('to');
+    if (fromRaw !== null && toRaw !== null) {
+      const f = DATE_PARAM_PATTERN.exec(fromRaw.trim());
+      const t = DATE_PARAM_PATTERN.exec(toRaw.trim());
+      if (!f || !t) return null;
+      let from = buildLocalDate(Number(f[1]), Number(f[2]), Number(f[3]));
+      let to = buildLocalDate(Number(t[1]), Number(t[2]), Number(t[3]));
+      if (!from || !to) return null;
+      if (from.getTime() > to.getTime()) {
+        const swap = from;
+        from = to;
+        to = swap;
+      }
+      return {
+        kind: 'range',
+        from,
+        to,
+        label: `${format(from, 'd MMM yyyy')} – ${format(to, 'd MMM yyyy')}`,
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Never put a raw Postgres / transport error in front of a client.
+ * Log the detail, show them something they can act on.
+ */
+export const friendlyLoadError = (raw: unknown): string => {
+  const message =
+    raw instanceof Error
+      ? raw.message
+      : typeof raw === 'string'
+        ? raw
+        : raw && typeof raw === 'object' && typeof (raw as any).message === 'string'
+          ? (raw as any).message
+          : '';
+  const lower = message.toLowerCase();
+  if (lower.includes('statement timeout') || lower.includes('timeout') || lower.includes('57014')) {
+    return 'This is taking longer than usual to load. Please try Sync Data, or narrow the date range.';
+  }
+  if (lower.includes('failed to fetch') || lower.includes('network')) {
+    return 'We could not reach the data service. Please check your connection and try again.';
+  }
+  return 'We could not load this data just now. Please try Sync Data, or contact hello@martincase.co.uk.';
+};
 
 interface SharedViewProps {
   forcedShareId?: string;
@@ -76,6 +176,12 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
   const params = useParams<{ shareId: string; brandName?: string }>();
   const shareId = forcedShareId ?? params.shareId;
   const brandName = forcedBrandName ?? params.brandName;
+
+  // Reporting-period deep link (see parsePeriodFromSearch above). Read before the
+  // date state is created so the very first data fetch already uses the right window.
+  const [searchParams] = useSearchParams();
+  const deepLinkPeriod = useMemo(() => parsePeriodFromSearch(searchParams), [searchParams]);
+
   const [account, setAccount] = useState<AccountData | null>(null);
   const [status, setStatus] = useState('Initializing...');
   const [isLoading, setIsLoading] = useState(true);
@@ -86,10 +192,22 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
   const [rawAsinData, setRawAsinData] = useState<any[]>([]);
   const [rawVendorData, setRawVendorData] = useState<any[]>([]);
   const [inventoryData, setInventoryData] = useState<InventoryData[]>([]);
-  const [dateFilter, setDateFilter] = useState<DateFilter>('last-14-days');
-  const [customDateRange, setCustomDateRange] = useState<{ from: Date; to: Date } | undefined>();
+  const [dateFilter, setDateFilter] = useState<DateFilter>(deepLinkPeriod ? 'custom' : 'last-14-days');
+  const [customDateRange, setCustomDateRange] = useState<{ from: Date; to: Date } | undefined>(
+    deepLinkPeriod ? { from: deepLinkPeriod.from, to: deepLinkPeriod.to } : undefined,
+  );
+
+  /** True while the on-screen period is still the one the email linked to. */
+  const isShowingDeepLinkPeriod =
+    !!deepLinkPeriod &&
+    dateFilter === 'custom' &&
+    !!customDateRange &&
+    customDateRange.from.getTime() === deepLinkPeriod.from.getTime() &&
+    customDateRange.to.getTime() === deepLinkPeriod.to.getTime();
   const [selectedChartMetrics, setSelectedChartMetrics] = useState<string[]>(['sales', 'ppcSales']);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  /** Client-safe message for a failed data load — never raw Postgres text. */
+  const [dataError, setDataError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ClientTab>('performance');
   const { availability: tabAvailability, ready: tabAvailabilityReady } = useTabAvailability(account?.name, account?.merchantToken, account?.profileId);
   const isVendor = account?.type === 'vendor' || isVendorAccount(account?.merchantToken);
@@ -167,7 +285,7 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
   });
 
   // API PPC data hook - fetches from Amazon Advertising API tables
-  const { metrics: apiPpcMetrics, previousMetrics: apiPpcPreviousMetrics, isLoading: apiPpcLoading, allDailyData: apiPpcAllDaily } = useApiPpcData({
+  const { metrics: apiPpcMetrics, previousMetrics: apiPpcPreviousMetrics, isLoading: apiPpcLoading, allDailyData: apiPpcAllDaily, error: apiPpcError } = useApiPpcData({
     accountName: account?.name || '',
     dateFilter,
     customDateRange,
@@ -205,13 +323,16 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
   }, [sheetData, ppcData, account, dateFilter, customDateRange]);
 
   const hasNoActivity = useMemo(() => {
-    if (loadingProgress.sales || loadingProgress.ppc || apiPpcLoading) return false;
+    if (loadingProgress.sales || loadingProgress.ppc || loadingProgress.vendor || apiPpcLoading) return false;
+    // A failed query looks exactly like zero activity. Never tell a client they had
+    // no sales because a query fell over — let the error path speak instead.
+    if (dataError || apiPpcError) return false;
     const salesTotal = (directOrganicMetrics?.sales || 0) + (apiPpcMetrics?.sales || 0);
     const unitsTotal = (directOrganicMetrics?.unitsOrdered || 0);
     const adSpend = (apiPpcMetrics?.spend || 0);
     const adSales = (apiPpcMetrics?.sales || 0);
     return salesTotal === 0 && unitsTotal === 0 && adSpend === 0 && adSales === 0;
-  }, [loadingProgress.sales, loadingProgress.ppc, apiPpcLoading, directOrganicMetrics, apiPpcMetrics]);
+  }, [loadingProgress.sales, loadingProgress.ppc, loadingProgress.vendor, apiPpcLoading, dataError, apiPpcError, directOrganicMetrics, apiPpcMetrics]);
 
   const vendorHeatmapRows = useMemo(() => {
     if (account?.type !== 'vendor' || !apiPpcAllDaily?.length) return [];
@@ -286,10 +407,27 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
 
   // Also fetch a wider window for previous period comparisons
   const fetchSalesFromSupabaseWide = async (merchantToken: string) => {
-    // Fetch 90 days to cover any date filter + previous period
-    const startDate = format(subDays(new Date(), 90), 'yyyy-MM-dd');
-    const endDate = format(new Date(), 'yyyy-MM-dd');
-    
+    // 90 days covers the built-in filters and their comparison periods, but a
+    // deep-linked month (?month=YYYY-MM) can sit outside that, so widen the window
+    // to whatever the selected period — and its comparison period — actually needs.
+    const today = new Date();
+    let earliest = subDays(today, 90);
+    let latest = today;
+    try {
+      const current = getCurrentDateRange(dateFilter, customDateRange);
+      const previous = getPreviousDateRange(dateFilter, customDateRange);
+      for (const d of [current.from, previous.from]) {
+        if (d instanceof Date && !isNaN(d.getTime()) && d.getTime() < earliest.getTime()) earliest = d;
+      }
+      for (const d of [current.to, previous.to]) {
+        if (d instanceof Date && !isNaN(d.getTime()) && d.getTime() > latest.getTime()) latest = d;
+      }
+    } catch {
+      // Fall back to the plain 90-day window.
+    }
+    const startDate = format(earliest, 'yyyy-MM-dd');
+    const endDate = format(latest, 'yyyy-MM-dd');
+
     const allData: any[] = [];
     let offset = 0;
     const pageSize = 1000;
@@ -379,7 +517,8 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
   const loadAccountData = async () => {
     try {
       setStatus('Loading account data...');
-      
+      setDataError(null);
+
       if (!shareId || !brandName) {
         setStatus('Missing shareId or brandName');
         setIsLoading(false);
@@ -498,7 +637,7 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
               });
             }
           })
-          .catch(err => { console.error('Sales fetch failed:', err); })
+          .catch(err => { console.error('Sales fetch failed:', err); setDataError(friendlyLoadError(err)); })
           .finally(() => { setLoadingProgress(prev => ({ ...prev, sales: false })); });
 
         // ── PPC (Google Sheets) ──
@@ -517,7 +656,7 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
               setAccount(updated[0]);
             }
           })
-          .catch(err => { console.error('PPC fetch failed:', err); })
+          .catch(err => { console.error('PPC fetch failed:', err); setDataError(friendlyLoadError(err)); })
           .finally(() => { setLoadingProgress(prev => ({ ...prev, ppc: false })); });
 
         // ── VENDOR DATA (only for vendor accounts) ──
@@ -616,16 +755,13 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
       
       setIsLoading(false);
     } catch (error) {
+      // Log the real detail for us; show the client something they can act on.
+      // Raw Postgres text ("canceling statement due to statement timeout") must
+      // never reach the page.
       console.error('❌ SharedView: Error loading account:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Failed to load shared dashboard';
-      
-      // Handle specific error types
-      if (errorMessage.includes('timeout')) {
-        setStatus('Connection timeout. Please check your internet connection and try again.');
-      } else {
-        setStatus('Error: ' + errorMessage);
-      }
-      
+      setStatus(friendlyLoadError(error));
+      setDataError(friendlyLoadError(error));
+
       setIsLoading(false); // Always ensure loading stops
     }
   };
@@ -697,6 +833,27 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
   })();
   const isAnyDataLoading = Object.values(loadingProgress).some(loading => loading);
 
+  // Which non-GBP currencies are actually folded into a GBP figure on this page.
+  // Empty ⇒ nothing is converted, and the basis note says so rather than leaving
+  // the reader to assume.
+  const convertedCurrencies: string[] = (() => {
+    const inScope = brandCountries.countries.filter((c) => {
+      if (effectiveScope === 'ALL') return true;
+      if (effectiveScope === 'ALL_EU') return c.region === 'EU';
+      return c.country_code === effectiveScope;
+    });
+    const source = inScope.length ? inScope : brandCountries.countries;
+    // Only a multi-market roll-up is actually converted; a single non-GBP market
+    // is shown in its own currency.
+    if (source.length < 2) return [];
+    return Array.from(new Set(source.map((c) => (c.currency || '').toUpperCase()).filter((c) => c && c !== 'GBP')));
+  })();
+
+  // KPI cards must stay in a skeleton until EVERY input has settled. Rendering
+  // organic sales before the Ads API resolves showed a confident-looking
+  // intermediate total (Portwest: £431,793.68 for ~25s before £605,215.35).
+  const metricsSettling = loadingProgress.sales || loadingProgress.ppc || loadingProgress.vendor || apiPpcLoading;
+
   // Debug logging before render
 
   return (
@@ -740,8 +897,11 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
 
         {/* Header - Gradient design */}
         <div className="rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-4">
-          {/* Top Row - Gradient section */}
-          <div className="bg-gradient-to-r from-blue-600 via-blue-500 to-cyan-400 px-3 py-2 md:px-6 md:py-5">
+          {/* Top Row - Gradient section.
+              Colour stops are chosen so white text clears 4.5:1 across the WHOLE
+              sweep: blue-700 6.70:1 → blue-600 5.17:1 → cyan-700 5.36:1. The old
+              cyan-400 end measured 1.81:1 (1.66:1 for the white/90 date caption). */}
+          <div className="bg-gradient-to-r from-blue-700 via-blue-600 to-cyan-700 px-3 py-2 md:px-6 md:py-5">
             <div className="flex items-center justify-between gap-2 md:gap-4">
               <div className="flex items-center gap-2 md:gap-6 min-w-0">
                 <img 
@@ -764,7 +924,7 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
                   <button
                     type="button"
                     onClick={() => setUnlockModalOpen(true)}
-                    className="hidden sm:inline-flex items-center gap-1 text-xs md:text-sm text-white/90 hover:text-white underline-offset-2 hover:underline h-8 px-2"
+                    className="hidden sm:inline-flex items-center gap-1 text-xs md:text-sm text-white hover:text-white underline-offset-2 hover:underline h-8 px-2"
                     title="Unlock more data"
                   >
                     <Sparkles className="h-3.5 w-3.5" />
@@ -775,7 +935,7 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
                   size="sm"
                   onClick={handleRefresh}
                   disabled={isRefreshing}
-                  className="bg-gradient-to-r from-emerald-400 to-emerald-500 hover:from-emerald-500 hover:to-emerald-600 text-white shadow-md hover:shadow-lg transition-all duration-300 rounded-xl font-semibold h-8 px-2 md:px-3"
+                  className="bg-gradient-to-r from-emerald-700 to-emerald-800 hover:from-emerald-800 hover:to-emerald-900 text-white shadow-md hover:shadow-lg transition-all duration-300 rounded-xl font-semibold h-8 px-2 md:px-3"
                 >
                   <RefreshCw className={`h-3.5 w-3.5 md:h-4 md:w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
                   <span className="hidden sm:inline ml-1">{isRefreshing ? 'Syncing...' : 'Sync Data'}</span>
@@ -791,14 +951,39 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
                 />
               </div>
             </div>
-            {/* Date-range caption on its own line below the button group */}
+            {/* Date-range caption on its own line below the button group.
+                Full white (not white/90) so the smallest text on the page still
+                clears 4.5:1 against every stop of the gradient. */}
             <div className="mt-1 md:mt-2 flex justify-end">
-              <span className="text-[10px] md:text-xs text-white/90 whitespace-nowrap">
+              <span className="text-[11px] md:text-xs font-medium text-white whitespace-nowrap">
                 {formatDateRangeText(dateFilter, customDateRange)}
               </span>
             </div>
           </div>
-          
+
+          {/* Deep-linked period echo — tells the client exactly which period they
+              are looking at and that it came from their monthly email. Disappears
+              as soon as they pick a different range. */}
+          {isShowingDeepLinkPeriod && deepLinkPeriod && (
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-blue-100 bg-blue-50 px-3 py-2 md:px-6">
+              <Calendar className="h-3.5 w-3.5 flex-shrink-0 text-blue-700" aria-hidden="true" />
+              <span className="text-xs md:text-sm font-semibold text-blue-900">
+                Showing {deepLinkPeriod.label}, as reported in your monthly email
+              </span>
+              <span className="text-[11px] md:text-xs text-blue-800">
+                {deepLinkPeriod.kind === 'month'
+                  ? `(${format(deepLinkPeriod.from, 'd MMM yyyy')} – ${format(deepLinkPeriod.to, 'd MMM yyyy')}) · `
+                  : ''}
+                use the date picker above to change the period
+              </span>
+            </div>
+          )}
+
+          {/* Statement of basis, directly beneath the reporting period. */}
+          <div className="border-t border-gray-200 bg-gray-50 px-3 py-2 md:px-6">
+            <ReportingBasisNote convertedCurrencies={convertedCurrencies} />
+          </div>
+
           {/* Focused Account Section */}
           <div className="bg-gradient-to-r from-blue-50 to-cyan-50 px-3 py-2 md:px-6 md:py-4 border-t border-blue-100">
             <div className="flex items-center gap-2 md:gap-3">
@@ -858,7 +1043,8 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
                   onClick={() => setActiveTab(tab.key)}
                   className={`flex items-center gap-1 md:gap-2 px-2 md:px-4 py-1.5 md:py-2.5 rounded-lg text-[11px] md:text-sm font-medium transition-all justify-center whitespace-nowrap flex-shrink-0 ${
                     activeTab === tab.key
-                      ? 'bg-gradient-to-r from-blue-600 to-cyan-500 text-white shadow-md'
+                      // cyan-500 measured 2.43:1 against white; cyan-700 is 5.36:1.
+                      ? 'bg-gradient-to-r from-blue-700 to-cyan-700 text-white shadow-md'
                       : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
                   }`}
                 >
@@ -984,10 +1170,22 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
                     <h2 className="text-base md:text-xl font-semibold text-foreground">Key Metrics</h2>
                     <p className="text-xs md:text-sm text-muted-foreground hidden sm:block">Overview of sales, PPC, and performance indicators</p>
                   </div>
-                  {loadingProgress.sales || loadingProgress.ppc ? (
+                  {metricsSettling ? (
                     <MetricsGridSkeleton />
+                  ) : dataError || apiPpcError ? (
+                    <Card className="rounded-xl border border-amber-200 bg-amber-50">
+                      <CardContent className="px-4 py-6 md:px-6">
+                        <p className="text-sm font-semibold text-amber-900">Key metrics are unavailable right now</p>
+                        <p className="mt-1 text-sm text-amber-800">
+                          {dataError ?? friendlyLoadError(apiPpcError)}
+                        </p>
+                        <p className="mt-1 text-xs text-amber-700">
+                          Nothing is being shown rather than a partial figure — a partial figure would be wrong.
+                        </p>
+                      </CardContent>
+                    </Card>
                   ) : (
-                    <MetricsGrid 
+                    <MetricsGrid
                       displayedAccounts={[account]} 
                       focusedAccount={account} 
                       selectedChartMetrics={selectedChartMetrics}
