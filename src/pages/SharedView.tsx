@@ -57,6 +57,7 @@ import { useTabAvailability } from '@/hooks/useTabAvailability';
 import { UnlockDashboardModal } from '@/components/dashboard/UnlockDashboardModal';
 import { Sparkles } from 'lucide-react';
 import { useBrandCountries } from '@/hooks/useBrandCountries';
+import { useScopedMetrics } from '@/hooks/useScopedMetrics';
 import { CountrySwitcher, type CountryScope } from '@/components/dashboard/CountrySwitcher';
 import { MultiCountryPanel } from '@/components/dashboard/MultiCountryPanel';
 import { SalesTrendCard } from '@/components/dashboard/SalesTrendCard';
@@ -123,6 +124,14 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
   }, [countryScope, brandCountries.primary]);
   const effectiveScope: CountryScope = countryScope || brandCountries.primary?.country_code || 'GB';
 
+  // Country-scoped organic KPIs. Resolved by brand so it follows the switcher
+  // for vendors too, whose selling_partner_id differs in every marketplace.
+  const scopedMetrics = useScopedMetrics(brandCountries.spid, effectiveScope, dateFilter, customDateRange);
+  const scopedMetricsForGrid = useMemo(
+    () => (brandCountries.error ? { ...scopedMetrics, error: brandCountries.error } : scopedMetrics),
+    [brandCountries.error, scopedMetrics],
+  );
+
   useEffect(() => {
     const map: Record<ClientTab, boolean> = {
       'performance': true,
@@ -167,7 +176,9 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
   });
 
   // API PPC data hook - fetches from Amazon Advertising API tables
-  const { metrics: apiPpcMetrics, previousMetrics: apiPpcPreviousMetrics, isLoading: apiPpcLoading, allDailyData: apiPpcAllDaily } = useApiPpcData({
+  // allDailyData spans the wider fetch buffer (>=30 days) and is only safe for
+  // the heatmap, which filters by date itself. dailyData is the selected period.
+  const { metrics: apiPpcMetrics, previousMetrics: apiPpcPreviousMetrics, isLoading: apiPpcLoading, allDailyData: apiPpcAllDaily, dailyData: apiPpcDailyData } = useApiPpcData({
     accountName: account?.name || '',
     dateFilter,
     customDateRange,
@@ -933,8 +944,11 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
               </div>
             ) : (() => {
               const homeCountry = brandCountries.primary?.country_code || 'GB';
-              const isVendor = isVendorAccount(account.merchantToken);
-              const isHomeScope = !brandCountries.isMultiCountry || isVendor || effectiveScope === homeCountry;
+              // NB: vendors used to be forced down the home-scope branch here, which
+              // is why picking Germany for Portwest kept showing the UK figures.
+              // rpc_metrics_daily_country now covers vendor accounts, so the
+              // country-scoped branch is correct for them too.
+              const isHomeScope = !brandCountries.isMultiCountry || effectiveScope === homeCountry;
 
               if (!isHomeScope && brandCountries.spid) {
                 return (
@@ -1000,7 +1014,12 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
                       directOrganicMetrics={directOrganicMetrics}
                       directOrganicPreviousMetrics={directOrganicPreviousMetrics}
                       dateFilter={dateFilter}
-                      apiPpcDailyData={apiPpcAllDaily}
+                      // apiPpcDailyData drives the vendor KPI totals inside
+                      // MetricsGrid, so it must be the SELECTED period. allDailyData
+                      // is a >=30-day fetch buffer and produced a headline "Units
+                      // Ordered" roughly double the daily grid beneath it.
+                      apiPpcDailyData={apiPpcDailyData}
+                      scopedMetrics={scopedMetricsForGrid}
                     />
                   )}
                 </section>
@@ -1010,8 +1029,11 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
 
             {(() => {
               const homeCountry = brandCountries.primary?.country_code || 'GB';
-              const isVendor = isVendorAccount(account.merchantToken);
-              const isHomeScope = !brandCountries.isMultiCountry || isVendor || effectiveScope === homeCountry;
+              // NB: vendors used to be forced down the home-scope branch here, which
+              // is why picking Germany for Portwest kept showing the UK figures.
+              // rpc_metrics_daily_country now covers vendor accounts, so the
+              // country-scoped branch is correct for them too.
+              const isHomeScope = !brandCountries.isMultiCountry || effectiveScope === homeCountry;
               if (!isHomeScope) return null;
               return (
                 <>

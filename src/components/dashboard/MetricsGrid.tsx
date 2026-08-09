@@ -7,6 +7,8 @@ import { AdTypeToggle } from '@/components/dashboard/AdTypeToggle';
 import type { AccountData, DateFilter } from '@/types/dashboard';
 import type { ApiPpcMetrics, AdType, ApiPpcDailyRow } from '@/hooks/useApiPpcData';
 import { isVendorAccount as isVendorAccountCheck } from '@/utils/vendorUtils';
+import type { UseScopedMetricsResult } from '@/hooks/useScopedMetrics';
+import { AlertTriangle } from 'lucide-react';
 
 export interface OrganicMetrics {
   sales: number;
@@ -39,6 +41,13 @@ interface MetricsGridProps {
   directOrganicPreviousMetrics?: OrganicMetrics | null;
   apiPpcDailyData?: ApiPpcDailyRow[];
   dateFilter?: DateFilter;
+  /**
+   * Country-scoped organic metrics from rpc_metrics_daily_country. When supplied
+   * this is the ONLY source for sales / units / page views / buy box /
+   * conversion — the account-level fallbacks below are not country aware and
+   * silently report the home marketplace for every scope.
+   */
+  scopedMetrics?: UseScopedMetricsResult | null;
 }
 
 export const MetricsGrid = ({ 
@@ -55,6 +64,7 @@ export const MetricsGrid = ({
   directOrganicPreviousMetrics,
   apiPpcDailyData,
   dateFilter,
+  scopedMetrics,
 }: MetricsGridProps) => {
   // Compute comparison label based on date filter
   const comparisonLabel = useMemo(() => {
@@ -99,7 +109,7 @@ export const MetricsGrid = ({
   }), { sales: 0, ppcSpend: 0, ppcSales: 0, unitsOrdered: 0, pageViews: 0, impressions: 0, clicks: 0, cpc: 0, ctr: 0 });
 
   // Use direct organic metrics if provided (always preferred - computed fresh from raw sheetData)
-  const totalMetrics = directOrganicMetrics
+  const baseTotalMetrics = directOrganicMetrics
     ? { sales: directOrganicMetrics.sales, unitsOrdered: directOrganicMetrics.unitsOrdered, pageViews: directOrganicMetrics.pageViews, ppcSpend: directOrganicMetrics.ppcSpend, ppcSales: directOrganicMetrics.ppcSales, impressions: directOrganicMetrics.impressions, clicks: directOrganicMetrics.clicks, cpc: directOrganicMetrics.cpc, ctr: directOrganicMetrics.ctr }
     : accountAggregated;
 
@@ -115,9 +125,26 @@ export const MetricsGrid = ({
     ctr: acc.ctr + (account.previousPeriod?.ctr || 0),
   }), { sales: 0, ppcSpend: 0, ppcSales: 0, unitsOrdered: 0, pageViews: 0, impressions: 0, clicks: 0, cpc: 0, ctr: 0 });
 
-  const totalPreviousMetrics = directOrganicPreviousMetrics
+  const basePreviousMetrics = directOrganicPreviousMetrics
     ? { sales: directOrganicPreviousMetrics.sales, unitsOrdered: directOrganicPreviousMetrics.unitsOrdered, pageViews: directOrganicPreviousMetrics.pageViews, ppcSpend: directOrganicPreviousMetrics.ppcSpend, ppcSales: directOrganicPreviousMetrics.ppcSales, impressions: directOrganicPreviousMetrics.impressions, clicks: directOrganicPreviousMetrics.clicks, cpc: directOrganicPreviousMetrics.cpc, ctr: directOrganicPreviousMetrics.ctr }
     : prevAccountAggregated;
+
+  // ---------------------------------------------------------------------
+  // Country scope. The organic figures above are account-level: they know
+  // nothing about the country switcher, so on any non-home scope they show the
+  // home marketplace under the wrong flag. Where a scoped series is available
+  // it wins outright for sales / units / page views / buy box / conversion.
+  // ---------------------------------------------------------------------
+  const scoped = scopedMetrics?.totals ?? null;
+  const scopedPrev = scopedMetrics?.previousTotals ?? null;
+  const scopeError = scopedMetrics?.error ?? null;
+
+  const totalMetrics = scoped
+    ? { ...baseTotalMetrics, sales: scoped.sales, unitsOrdered: scoped.unitsOrdered, pageViews: scoped.pageViews }
+    : baseTotalMetrics;
+  const totalPreviousMetrics = scopedPrev
+    ? { ...basePreviousMetrics, sales: scopedPrev.sales, unitsOrdered: scopedPrev.unitsOrdered, pageViews: scopedPrev.pageViews }
+    : basePreviousMetrics;
 
   // PPC metrics: use API if available, otherwise fall back to daily_asin_data
   const ppcSpend = hasApiPpc ? apiPpcMetrics.spend : totalMetrics.ppcSpend;
@@ -149,26 +176,54 @@ export const MetricsGrid = ({
   const prevAdvertisingReliance = totalPreviousMetrics.sales > 0 ? (prevPpcSales / totalPreviousMetrics.sales) * 100 : 0;
 
   // Organic metrics - prefer direct computation
-  const avgBuyBoxPercentage = directOrganicMetrics ? directOrganicMetrics.buyBoxPercentage
+  const fallbackBuyBoxPercentage = directOrganicMetrics ? directOrganicMetrics.buyBoxPercentage
     : displayedAccounts.length > 0 
       ? displayedAccounts.reduce((acc, account) => acc + account.buyBoxPercentage, 0) / displayedAccounts.length 
       : 0;
-  const avgConversionRate = directOrganicMetrics ? directOrganicMetrics.conversionRate
-    : displayedAccounts.length > 0 
-      ? displayedAccounts.reduce((acc, account) => acc + account.conversionRate, 0) / displayedAccounts.length 
+  const fallbackConversionRate = directOrganicMetrics ? directOrganicMetrics.conversionRate
+    : displayedAccounts.length > 0
+      ? displayedAccounts.reduce((acc, account) => acc + account.conversionRate, 0) / displayedAccounts.length
       : 0;
-  const avgPreviousBuyBoxPercentage = directOrganicPreviousMetrics ? directOrganicPreviousMetrics.buyBoxPercentage
-    : displayedAccounts.length > 0 
-      ? displayedAccounts.reduce((acc, account) => acc + (account.previousPeriod?.buyBoxPercentage || 0), 0) / displayedAccounts.length 
+  const fallbackPreviousBuyBoxPercentage = directOrganicPreviousMetrics ? directOrganicPreviousMetrics.buyBoxPercentage
+    : displayedAccounts.length > 0
+      ? displayedAccounts.reduce((acc, account) => acc + (account.previousPeriod?.buyBoxPercentage || 0), 0) / displayedAccounts.length
       : 0;
-  const avgPreviousConversionRate = directOrganicPreviousMetrics ? directOrganicPreviousMetrics.conversionRate
-    : displayedAccounts.length > 0 
-      ? displayedAccounts.reduce((acc, account) => acc + (account.previousPeriod?.conversionRate || 0), 0) / displayedAccounts.length 
+  const fallbackPreviousConversionRate = directOrganicPreviousMetrics ? directOrganicPreviousMetrics.conversionRate
+    : displayedAccounts.length > 0
+      ? displayedAccounts.reduce((acc, account) => acc + (account.previousPeriod?.conversionRate || 0), 0) / displayedAccounts.length
       : 0;
+
+  const avgBuyBoxPercentage = scoped?.buyBoxPercentage ?? (scoped ? 0 : fallbackBuyBoxPercentage);
+  const avgPreviousBuyBoxPercentage = scopedPrev?.buyBoxPercentage ?? (scopedPrev ? 0 : fallbackPreviousBuyBoxPercentage);
+
+  // Conversion is Σunits ÷ Σsessions for the whole period (never a mean of daily
+  // rates, and never units ÷ page views — a session can hold several page views).
+  // It is withheld rather than printed when there are no sessions in the feed, or
+  // when the arithmetic comes out impossible.
+  const conversionAvailable = !!scoped
+    ? scoped.conversionRate != null && !scoped.conversionImplausible
+    : true;
+  const conversionUnavailableReason = !scoped
+    ? null
+    : scoped.conversionRate == null
+      ? (scoped.hasSessions ? 'No sessions recorded in this period.' : 'Session data is not reported for this account.')
+      : scoped.conversionImplausible
+        ? `Units (${Math.round(scoped.unitsOrdered).toLocaleString()}) exceed sessions (${Math.round(scoped.sessions || 0).toLocaleString()}), so this cannot be a conversion rate.`
+        : null;
+  const avgConversionRate = scoped ? (scoped.conversionRate ?? 0) : fallbackConversionRate;
+  const avgPreviousConversionRate = scopedPrev
+    ? (scopedPrev.conversionImplausible ? 0 : (scopedPrev.conversionRate ?? 0))
+    : fallbackPreviousConversionRate;
+  const conversionDenominatorLabel = scoped?.hasSessions ? 'browser sessions' : 'sessions';
 
 
   const showExtendedMetrics = focusedAccount !== null;
   const isVendor = isVendorAccountCheck(focusedAccount?.merchantToken);
+
+  // Organic sparklines come from the scoped daily series, so the KPI totals and
+  // the line under them are literally the same numbers — which is what the
+  // seriesSemantics="sum" assertion on each card checks.
+  const scopedSeries = scopedMetrics?.series ?? null;
 
   // Build sparkline data from daily PPC/vendor rows (last 7 data points)
   const sparklines = useMemo(() => {
@@ -212,14 +267,32 @@ export const MetricsGrid = ({
   const prevVendorSales = apiPpcPreviousMetrics?.sales ?? 0;
   const prevVendorOrders = apiPpcPreviousMetrics?.orders ?? 0;
 
+  // A scope we could not resolve must be shown, not papered over with the home
+  // market's numbers.
+  const scopeErrorBanner = scopeError ? (
+    <div className="flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
+      <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+      <div>
+        <div className="font-medium">Country-scoped figures unavailable</div>
+        <div className="text-xs">{scopeError}</div>
+      </div>
+    </div>
+  ) : null;
+
   if (showExtendedMetrics) {
     // VENDOR-SPECIFIC KPI LAYOUT
     if (isVendor) {
-      const vendorSales = apiPpcMetrics?.sales ?? totalMetrics.sales;
-      const vendorUnits = vendorMetrics?.unitsOrdered ?? totalMetrics.unitsOrdered;
+      // vendorMetrics sums apiPpcDailyData, whose window the caller controls and
+      // which has in the past been a ~30-day fetch buffer rather than the
+      // selected period. Prefer the scoped series, which is exact by construction.
+      const vendorSales = scoped ? scoped.sales : (apiPpcMetrics?.sales ?? totalMetrics.sales);
+      const vendorUnits = scoped ? scoped.unitsOrdered : (vendorMetrics?.unitsOrdered ?? totalMetrics.unitsOrdered);
+      const vendorSalesSpark = scopedSeries?.sales ?? sparklines.sales;
+      const vendorUnitsSpark = scopedSeries?.units ?? sparklines.unitsOrdered;
 
       return (
         <div className="space-y-4">
+          {scopeErrorBanner}
           {/* Vendor Financial Metrics */}
           <div>
             <h3 className="text-base md:text-lg font-semibold text-foreground mb-3 md:mb-4 flex items-center">
@@ -235,11 +308,12 @@ export const MetricsGrid = ({
                 value={formatCurrencyForMetrics(vendorSales)}
                 color="text-blue-600"
                 currentValue={vendorSales}
-                previousValue={prevVendorSales || totalPreviousMetrics.sales}
+                previousValue={scopedPrev ? scopedPrev.sales : (prevVendorSales || totalPreviousMetrics.sales)}
                 comparisonLabel={comparisonLabel}
                 onClick={onToggleChartMetric ? () => onToggleChartMetric('sales') : undefined}
                 isSelected={selectedChartMetrics?.includes('sales')}
-                sparklineData={sparklines.sales}
+                sparklineData={vendorSalesSpark}
+                seriesSemantics={scopedSeries ? 'sum' : undefined}
               />
 
               <MetricsCard
@@ -247,11 +321,12 @@ export const MetricsGrid = ({
                 value={vendorUnits.toLocaleString()}
                 color="text-indigo-600"
                 currentValue={vendorUnits}
-                previousValue={prevVendorOrders || totalPreviousMetrics.unitsOrdered}
+                previousValue={scopedPrev ? scopedPrev.unitsOrdered : (prevVendorOrders || totalPreviousMetrics.unitsOrdered)}
                 comparisonLabel={comparisonLabel}
                 onClick={onToggleChartMetric ? () => onToggleChartMetric('unitsSold') : undefined}
                 isSelected={selectedChartMetrics?.includes('unitsSold')}
-                sparklineData={sparklines.unitsOrdered}
+                sparklineData={vendorUnitsSpark}
+                seriesSemantics={scopedSeries ? 'sum' : undefined}
               />
             </div>
           </div>
@@ -321,6 +396,7 @@ export const MetricsGrid = ({
     // SELLER-SPECIFIC KPI LAYOUT (existing)
     return (
       <div className="space-y-4">
+        {scopeErrorBanner}
         {/* Primary Financial Metrics */}
         <div>
           <h3 className="text-base md:text-lg font-semibold text-gray-900 mb-3 md:mb-4 flex items-center">
@@ -340,9 +416,10 @@ export const MetricsGrid = ({
               comparisonLabel={comparisonLabel}
               onClick={onToggleChartMetric ? () => onToggleChartMetric('sales') : undefined}
               isSelected={selectedChartMetrics?.includes('sales')}
-              sparklineData={sparklines.sales}
+              sparklineData={scopedSeries?.sales ?? sparklines.sales}
+              seriesSemantics={scopedSeries ? 'sum' : undefined}
             />
-            
+
             <MetricsCard
               title="PPC Spend"
               info="Total advertising spend in the period. Cost metric — a rising delta is bad and turns red."
@@ -380,7 +457,8 @@ export const MetricsGrid = ({
               comparisonLabel={comparisonLabel}
               onClick={onToggleChartMetric ? () => onToggleChartMetric('unitsSold') : undefined}
               isSelected={selectedChartMetrics?.includes('unitsSold')}
-              sparklineData={sparklines.orders}
+              sparklineData={scopedSeries?.units ?? sparklines.orders}
+              seriesSemantics={scopedSeries ? 'sum' : undefined}
             />
 
           </div>
@@ -533,8 +611,10 @@ export const MetricsGrid = ({
               comparisonLabel={comparisonLabel}
                 onClick={onToggleChartMetric ? () => onToggleChartMetric('pageViews') : undefined}
                 isSelected={selectedChartMetrics?.includes('pageViews')}
+                sparklineData={scopedSeries?.pageViews}
+                seriesSemantics={scopedSeries ? 'sum' : undefined}
               />
-              
+
               <MetricsCard
                 title="Buy Box %"
                 value={formatPercentage(avgBuyBoxPercentage)}
@@ -546,13 +626,21 @@ export const MetricsGrid = ({
                 onClick={onToggleChartMetric ? () => onToggleChartMetric('buyBoxPercentage') : undefined}
                 isSelected={selectedChartMetrics?.includes('buyBoxPercentage')}
               />
-              
+
               <MetricsCard
                 title="Conversion Rate"
-                value={formatPercentage(avgConversionRate)}
-                color="text-red-600"
-                currentValue={avgConversionRate}
-                previousValue={avgPreviousConversionRate}
+                info={`Units ordered ÷ ${conversionDenominatorLabel} for the whole period. Page views are not sessions — one session can span several page views — so the two give different rates.`}
+                subtitle={
+                  conversionAvailable
+                    ? (scoped?.sessions != null
+                        ? `${Math.round(scoped.unitsOrdered).toLocaleString()} units ÷ ${Math.round(scoped.sessions).toLocaleString()} ${conversionDenominatorLabel}`
+                        : undefined)
+                    : conversionUnavailableReason
+                }
+                value={conversionAvailable ? formatPercentage(avgConversionRate) : '—'}
+                color={conversionAvailable ? 'text-red-600' : 'text-muted-foreground'}
+                currentValue={conversionAvailable ? avgConversionRate : 0}
+                previousValue={conversionAvailable ? avgPreviousConversionRate : 0}
               comparisonLabel={comparisonLabel}
                 isPercentage={true}
                 onClick={onToggleChartMetric ? () => onToggleChartMetric('conversionRate') : undefined}

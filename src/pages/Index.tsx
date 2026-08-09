@@ -36,6 +36,7 @@ import { AccountHealthTile } from "@/components/dashboard/AccountHealthTile";
 import { CollapsibleAlerts } from "@/components/dashboard/CollapsibleAlerts";
 import { PerformanceExportButton } from "@/components/dashboard/PerformanceExportButton";
 import { useBrandCountries } from "@/hooks/useBrandCountries";
+import { useScopedMetrics } from "@/hooks/useScopedMetrics";
 import { CountrySwitcher, type CountryScope } from "@/components/dashboard/CountrySwitcher";
 import { MultiCountryPanel } from "@/components/dashboard/MultiCountryPanel";
 import { SalesTrendCard } from "@/components/dashboard/SalesTrendCard";
@@ -1079,6 +1080,22 @@ const Index = () => {
     return m ? [m.sales_account_key].filter(Boolean) : undefined;
   })();
 
+  // Country-scoped organic KPIs for the focused brand. Resolved by brand, so it
+  // follows the switcher even for vendors, whose spid differs per marketplace.
+  const focusedScopedMetrics = useScopedMetrics(
+    focusedAccountId ? focusedBrandCountries.spid : null,
+    focusedAccountId ? effectiveFocusedScope : null,
+    dateFilter,
+    customDateRange,
+  );
+  const focusedScopedMetricsForGrid = useMemo(() => {
+    if (!focusedAccountId) return null;
+    if (focusedBrandCountries.error) {
+      return { ...focusedScopedMetrics, error: focusedBrandCountries.error };
+    }
+    return focusedScopedMetrics;
+  }, [focusedAccountId, focusedBrandCountries.error, focusedScopedMetrics]);
+
   // Optional add-ons for the focused brand (Budgets, etc.)
   const focusedAddons = useDashboardAddons(focusedBrandCountries.spid);
 
@@ -1486,6 +1503,7 @@ const Index = () => {
                       directOrganicPreviousMetrics={directOrganicPreviousMetrics}
                       apiPpcDailyData={focusedAccount ? apiPpcDailyData : undefined}
                       dateFilter={dateFilter}
+                      scopedMetrics={focusedScopedMetricsForGrid}
                     />
                   </CollapsibleSection>
 
