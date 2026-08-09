@@ -18,6 +18,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { format, addDays, differenceInCalendarDays, parseISO } from 'date-fns';
 import { openAmazonProduct } from '@/utils/amazonUtils';
 import { formatCurrencyByMerchantToken } from '@/utils/formatters';
+import { isFeedErrorRow } from '@/utils/stockDataQuality';
 import { toast } from 'sonner';
 
 interface InventoryPlannerDashboardProps {
@@ -150,7 +151,10 @@ export function InventoryPlannerDashboard({ merchantToken, accountName, accountT
           p_velocity_days: 30,
         });
         if (error) { setSnapshotRows([]); return; }
-        setSnapshotRows((data as any[]) || []);
+        // Never let a supplier feed error row become a planner line item.
+        setSnapshotRows(((data as any[]) || []).filter(
+          (r) => !isFeedErrorRow(r.asin, r.sku, r.product_name),
+        ));
       } catch {
         setSnapshotRows([]);
       }
@@ -171,18 +175,23 @@ export function InventoryPlannerDashboard({ merchantToken, accountName, accountT
         .eq('account_name', merchantToken)
         .order('record_date', { ascending: false });
 
-      // Deduplicate to latest date per SKU
+      // Drop supplier feed error rows before they can become products, then
+      // deduplicate to the latest date per SKU.
       const fbaMap = new Map<string, any>();
-      (fbaData || []).forEach(r => {
-        const key = r.sku || r.asin;
-        if (!fbaMap.has(key)) fbaMap.set(key, r);
-      });
+      (fbaData || [])
+        .filter(r => !isFeedErrorRow(r.asin, r.sku, r.product_name))
+        .forEach(r => {
+          const key = r.sku || r.asin;
+          if (!fbaMap.has(key)) fbaMap.set(key, r);
+        });
 
       const fbmMap = new Map<string, any>();
-      (fbmData || []).forEach(r => {
-        const key = r.seller_sku || r.asin;
-        if (!fbmMap.has(key)) fbmMap.set(key, r);
-      });
+      (fbmData || [])
+        .filter(r => !isFeedErrorRow(r.asin, r.seller_sku, r.item_name))
+        .forEach(r => {
+          const key = r.seller_sku || r.asin;
+          if (!fbmMap.has(key)) fbmMap.set(key, r);
+        });
 
       setStockData([...Array.from(fbaMap.values()).map(r => ({ ...r, _source: 'fba' })),
                      ...Array.from(fbmMap.values()).map(r => ({ ...r, _source: 'fbm' }))]);
@@ -513,11 +522,26 @@ export function InventoryPlannerDashboard({ merchantToken, accountName, accountT
     const totalInvestment = fbaRows.reduce((sum, r) => sum + r.reorderQty * r.price, 0);
     const totalRevAtRisk = fbaRows.reduce((sum, r) => sum + r.revenueAtRisk, 0);
     const activeFba = fbaRows.filter(r => r.avgDailySales > 0);
-    const avgDaysStock = activeFba.length > 0 
-      ? activeFba.reduce((sum, r) => sum + (r.daysRemaining ?? 0), 0) / activeFba.length 
-      : 0;
-    return { reorderCount: needsReorder.length, hasStockout, totalInvestment, totalRevAtRisk, avgDaysStock, dormantCount: dormantWithRestock.length };
+    // No qualifying rows means the average is unknown, not zero.
+    const avgDaysStock = activeFba.length > 0
+      ? activeFba.reduce((sum, r) => sum + (r.daysRemaining ?? 0), 0) / activeFba.length
+      : null;
+    // Money figures are only meaningful if the feed actually carried prices.
+    const hasPriceData = fbaRows.some(r => r.price > 0);
+    return {
+      reorderCount: needsReorder.length,
+      hasStockout,
+      totalInvestment,
+      totalRevAtRisk,
+      avgDaysStock,
+      hasPriceData,
+      dormantCount: dormantWithRestock.length,
+    };
   }, [fbaRows, dormantWithRestock]);
+
+  /** Money that depends on price data: show "—" when there is no price feed, never £0. */
+  const fmtMoneyOrUnknown = (v: number) =>
+    kpis.hasPriceData ? formatCurrencyByMerchantToken(v, merchantToken) : '—';
 
   const handleSort = (field: SortField) => {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -645,8 +669,12 @@ export function InventoryPlannerDashboard({ merchantToken, accountName, accountT
             </CardTitle>
           </CardHeader>
           <CardContent className="p-3 pt-0 md:p-6 md:pt-0">
-            <p className="text-2xl md:text-3xl font-bold">{fmtCurrency(kpis.totalInvestment)}</p>
-            <p className="text-[10px] md:text-xs text-muted-foreground">at retail price</p>
+            <p className={`text-2xl md:text-3xl font-bold ${kpis.hasPriceData ? '' : 'text-muted-foreground'}`}>
+              {fmtMoneyOrUnknown(kpis.totalInvestment)}
+            </p>
+            <p className="text-[10px] md:text-xs text-muted-foreground">
+              {kpis.hasPriceData ? 'at retail price' : 'no price data in feed'}
+            </p>
           </CardContent>
         </Card>
 
@@ -658,10 +686,12 @@ export function InventoryPlannerDashboard({ merchantToken, accountName, accountT
             </CardTitle>
           </CardHeader>
           <CardContent className="p-3 pt-0 md:p-6 md:pt-0">
-            <p className={`text-2xl md:text-3xl font-bold ${kpis.totalRevAtRisk > 0 ? 'text-red-600' : ''}`}>
-              {fmtCurrency(kpis.totalRevAtRisk)}
+            <p className={`text-2xl md:text-3xl font-bold ${!kpis.hasPriceData ? 'text-muted-foreground' : kpis.totalRevAtRisk > 0 ? 'text-red-600' : ''}`}>
+              {fmtMoneyOrUnknown(kpis.totalRevAtRisk)}
             </p>
-            <p className="text-[10px] md:text-xs text-muted-foreground">during lead time gap</p>
+            <p className="text-[10px] md:text-xs text-muted-foreground">
+              {kpis.hasPriceData ? 'during lead time gap' : 'no price data in feed'}
+            </p>
           </CardContent>
         </Card>
 
@@ -674,11 +704,16 @@ export function InventoryPlannerDashboard({ merchantToken, accountName, accountT
           </CardHeader>
           <CardContent className="p-3 pt-0 md:p-6 md:pt-0">
             <p className={`text-2xl md:text-3xl font-bold ${
-              kpis.avgDaysStock < 14 ? 'text-red-600' : kpis.avgDaysStock < 30 ? 'text-orange-600' : 'text-green-600'
+              kpis.avgDaysStock === null ? 'text-muted-foreground'
+                : kpis.avgDaysStock < 14 ? 'text-red-600'
+                : kpis.avgDaysStock < 30 ? 'text-orange-600'
+                : 'text-green-600'
             }`}>
-              {Math.round(kpis.avgDaysStock)}
+              {kpis.avgDaysStock === null ? '—' : Math.round(kpis.avgDaysStock)}
             </p>
-            <p className="text-[10px] md:text-xs text-muted-foreground">across active FBA ASINs</p>
+            <p className="text-[10px] md:text-xs text-muted-foreground">
+              {kpis.avgDaysStock === null ? 'no ASIN with sales velocity' : 'across active FBA ASINs'}
+            </p>
           </CardContent>
         </Card>
       </div>
@@ -884,7 +919,9 @@ export function InventoryPlannerDashboard({ merchantToken, accountName, accountT
                         <span className="text-red-600 font-medium">{fmtCurrency(row.revenueAtRisk)}</span>
                       ) : '—'}
                     </TableCell>
-                    <TableCell className="text-right text-sm">{fmtCurrency(row.price)}</TableCell>
+                    <TableCell className="text-right text-sm">
+                      {row.price > 0 ? fmtCurrency(row.price) : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -977,9 +1014,11 @@ export function InventoryPlannerDashboard({ merchantToken, accountName, accountT
                             <ExternalLink className="h-3 w-3" />
                           </button>
                         </TableCell>
-                        <TableCell className="text-right text-sm">{fmtCurrency(row.price)}</TableCell>
                         <TableCell className="text-right text-sm">
-                          {row.historicalAvgDailySales > 0 
+                          {row.price > 0 ? fmtCurrency(row.price) : <span className="text-muted-foreground">—</span>}
+                        </TableCell>
+                        <TableCell className="text-right text-sm">
+                          {row.historicalAvgDailySales > 0
                             ? row.historicalAvgDailySales.toFixed(1)
                             : <span className="text-muted-foreground text-xs">No data</span>
                           }
@@ -1051,7 +1090,9 @@ export function InventoryPlannerDashboard({ merchantToken, accountName, accountT
                           </button>
                         </TableCell>
                         <TableCell className="text-right">{row.fbmStock}</TableCell>
-                        <TableCell className="text-right">{fmtCurrency(row.price)}</TableCell>
+                        <TableCell className="text-right">
+                          {row.price > 0 ? fmtCurrency(row.price) : <span className="text-muted-foreground">—</span>}
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

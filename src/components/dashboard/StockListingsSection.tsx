@@ -36,7 +36,7 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export const StockListingsSection: React.FC<StockListingsSectionProps> = ({ merchantToken }) => {
-  const { dailySummary, currentListings, loading } = useStockData(merchantToken);
+  const { dailySummary, currentListings, feedErrorRows, loading } = useStockData(merchantToken);
   const { openASINDetail } = useASINDetail();
 
   const [chartOpen, setChartOpen] = useState(true);
@@ -57,7 +57,7 @@ export const StockListingsSection: React.FC<StockListingsSectionProps> = ({ merc
   };
 
   // Check if quantity is tracked (any non-zero day)
-  const hasQuantity = useMemo(() => dailySummary.some(d => d.total_quantity > 0), [dailySummary]);
+  const hasQuantity = useMemo(() => dailySummary.some(d => (d.total_quantity ?? 0) > 0), [dailySummary]);
 
   // Latest summary for cards
   const latest = dailySummary.length > 0 ? dailySummary[0] : null;
@@ -67,6 +67,7 @@ export const StockListingsSection: React.FC<StockListingsSectionProps> = ({ merc
     [...dailySummary].reverse().map(d => ({
       date: format(parseISO(d.record_date), 'dd MMM'),
       fullDate: format(parseISO(d.record_date), 'dd MMM yyyy'),
+      // null leaves a gap in the line rather than plotting a false zero
       quantity: d.total_quantity,
     })),
     [dailySummary]
@@ -89,6 +90,9 @@ export const StockListingsSection: React.FC<StockListingsSectionProps> = ({ merc
     return [...list].sort((a, b) => {
       let av: any = a[sortField];
       let bv: any = b[sortField];
+      // Unknown values sort last in both directions — absent is not "smallest".
+      if (av === null || av === undefined) return 1;
+      if (bv === null || bv === undefined) return -1;
       if (typeof av === 'string') { av = av.toLowerCase(); bv = bv.toLowerCase(); }
       return sortDir === 'asc' ? (av > bv ? 1 : -1) : (av < bv ? 1 : -1);
     });
@@ -116,6 +120,21 @@ export const StockListingsSection: React.FC<StockListingsSectionProps> = ({ merc
   }
 
   if (dailySummary.length === 0 && currentListings.length === 0) {
+    // Distinguish "nothing to show" from "the feed returned an error message".
+    if (feedErrorRows > 0) {
+      return (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-10 text-center">
+            <Package className="h-8 w-8 mb-2 text-amber-500" />
+            <p className="font-medium">Stock feed unavailable</p>
+            <p className="text-sm text-muted-foreground max-w-md mt-1">
+              The listings feed returned a supplier error instead of stock data, so there is nothing to
+              show. This is a data-collection problem, not a report of zero stock.
+            </p>
+          </CardContent>
+        </Card>
+      );
+    }
     return null; // No stock data for this account
   }
 
@@ -131,6 +150,13 @@ export const StockListingsSection: React.FC<StockListingsSectionProps> = ({ merc
           {currentListings.length} listings
         </span>
       </div>
+
+      {feedErrorRows > 0 && (
+        <div className="rounded-md border border-muted px-3 py-2 text-xs text-muted-foreground">
+          ⚠️ {feedErrorRows} row{feedErrorRows === 1 ? '' : 's'} from the listings feed contained a supplier
+          error message instead of product data and {feedErrorRows === 1 ? 'has' : 'have'} been excluded.
+        </div>
+      )}
 
       {/* ── Summary Cards ── */}
       {latest && (
@@ -264,9 +290,20 @@ export const StockListingsSection: React.FC<StockListingsSectionProps> = ({ merc
                           <span className="text-xs">{item.status}</span>
                         </div>
                       </TableCell>
-                      <TableCell className="text-right font-medium">{fmtPrice(item.price)}</TableCell>
-                      <TableCell className={cn('text-right font-medium', item.quantity === 0 ? 'text-red-600' : item.quantity < 10 ? 'text-yellow-600' : 'text-green-600')}>
-                        {item.quantity.toLocaleString()}
+                      <TableCell className="text-right font-medium">
+                        {item.price != null ? fmtPrice(item.price) : <span className="text-muted-foreground">—</span>}
+                      </TableCell>
+                      <TableCell
+                        className={cn(
+                          'text-right font-medium',
+                          item.quantity === null ? 'text-muted-foreground'
+                            : item.quantity === 0 ? 'text-red-600'
+                            : item.quantity < 10 ? 'text-yellow-600'
+                            : 'text-green-600',
+                        )}
+                        title={item.quantity === null ? 'No stock figure reported by the feed' : undefined}
+                      >
+                        {item.quantity !== null ? item.quantity.toLocaleString() : '—'}
                       </TableCell>
                       <TableCell>
                         <Badge variant="secondary" className={cn('text-xs text-white', item.fulfillment_channel?.toLowerCase().includes('amazon') ? 'bg-blue-500' : 'bg-green-500')}>

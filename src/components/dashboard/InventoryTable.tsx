@@ -8,6 +8,7 @@ import type { InventoryData } from '@/types/dashboard';
 import { formatCurrencyByMerchantToken } from '@/utils/formatters';
 import { openAmazonProduct } from '@/utils/amazonUtils';
 import { useASINDetail } from '@/hooks/useASINDetail';
+import { isFeedErrorRow } from '@/utils/stockDataQuality';
 
 interface InventoryTableProps {
   inventoryData: InventoryData[];
@@ -25,8 +26,13 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({ inventoryData, i
   const [showAll, setShowAll] = useState(false);
   const { openASINDetail } = useASINDetail();
 
-  // Filter out parent products (price = 0) as they're not relevant for inventory tracking
-  const filteredInventoryData = inventoryData.filter(item => item.price > 0);
+  // Drop supplier feed error rows (lapsed Windsor.ai licence string) so they can
+  // never be listed or counted as a product, then filter out parent products
+  // (price = 0) as they're not relevant for inventory tracking.
+  const feedErrorRows = inventoryData.filter(item => isFeedErrorRow(item.sku, item.asin, item.productName)).length;
+  const filteredInventoryData = inventoryData
+    .filter(item => !isFeedErrorRow(item.sku, item.asin, item.productName))
+    .filter(item => item.price > 0);
 
   if (filteredInventoryData.length === 0) {
     return (
@@ -35,7 +41,11 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({ inventoryData, i
           <CardTitle>Inventory</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-muted-foreground">No inventory data available for this account.</p>
+          <p className="text-muted-foreground">
+            {feedErrorRows > 0
+              ? 'Stock feed unavailable — the inventory feed returned a supplier error instead of stock data. This is a data-collection problem, not a report of zero stock.'
+              : 'No inventory data available for this account.'}
+          </p>
         </CardContent>
       </Card>
     );
@@ -262,7 +272,9 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({ inventoryData, i
               </p>
             </div>
             <div className="text-center">
-              <p className="text-sm text-muted-foreground">Out of Stock</p>
+              <p className="text-sm text-muted-foreground" title="Listings the feed reports as holding zero units">
+                Listings at zero stock
+              </p>
               <p className="text-lg font-semibold text-red-600">
                 {sortedInventory.filter(item => item.quantity === 0).length.toLocaleString()}
               </p>
