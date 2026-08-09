@@ -19,6 +19,8 @@ interface KPISummaryBannerProps {
   units: number;
   prevUnits: number;
   merchantToken: string;
+  /** e.g. "vs Jun 2026". Every change shown here must name its baseline. */
+  comparisonLabel?: string;
 }
 
 const getChangeColor = (change: number, invertPositive = false) => {
@@ -37,8 +39,15 @@ const calcChange = (current: number, previous: number) => {
   return ((current - previous) / previous) * 100;
 };
 
+const valenceOf = (change: number, invertPositive = false): 'better' | 'worse' | 'flat' => {
+  if (Math.abs(change) < 0.5) return 'flat';
+  const isGood = invertPositive ? change < 0 : change > 0;
+  return isGood ? 'better' : 'worse';
+};
+
 export const KPISummaryBanner = ({
-  sales, prevSales, ppcSpend, prevPpcSpend, acos, prevAcos, tacos, prevTacos, units, prevUnits, merchantToken
+  sales, prevSales, ppcSpend, prevPpcSpend, acos, prevAcos, tacos, prevTacos, units, prevUnits, merchantToken,
+  comparisonLabel,
 }: KPISummaryBannerProps) => {
   const kpis: (KPIItem & { invertPositive?: boolean })[] = [
     { label: 'Overall Sales', value: formatCurrencyByMerchantToken(sales, merchantToken), change: calcChange(sales, prevSales) },
@@ -49,20 +58,28 @@ export const KPISummaryBanner = ({
   ];
 
   return (
-    <div className="flex flex-wrap gap-2 p-3 rounded-lg bg-card border border-border shadow-sm">
+    <div className="flex flex-wrap items-center gap-2 p-3 rounded-lg bg-card border border-border shadow-sm">
       {kpis.map((kpi) => {
         const colorClass = getChangeColor(kpi.change, kpi.invertPositive);
+        const valence = valenceOf(kpi.change, kpi.invertPositive);
         return (
-          <div key={kpi.label} className={`flex items-center gap-2 px-3 py-1.5 rounded-md border text-sm ${colorClass}`}>
+          <div key={kpi.label} data-delta-badge="true" data-valence={valence} className={`flex items-center gap-2 px-3 py-1.5 rounded-md border text-sm ${colorClass}`}>
             <span className="font-medium opacity-70">{kpi.label}</span>
             <span className="font-bold">{kpi.value}</span>
             <span className="flex items-center gap-0.5 text-xs">
-              {getIcon(kpi.invertPositive ? -kpi.change : kpi.change)}
+              {/* Arrow = direction of travel (it used to be flipped for cost
+                  metrics, so a falling ACOS drew an UP arrow). Valence is the
+                  word next to it. */}
+              {getIcon(kpi.change)}
               {Math.abs(kpi.change).toFixed(1)}%
+              {valence !== 'flat' && <span className="ml-1 font-medium">{valence}</span>}
             </span>
           </div>
         );
       })}
+      {comparisonLabel && (
+        <span className="text-xs text-muted-foreground">All changes {comparisonLabel}</span>
+      )}
     </div>
   );
 };

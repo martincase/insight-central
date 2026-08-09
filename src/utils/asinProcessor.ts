@@ -3,7 +3,7 @@ import { parse, isWithinInterval, parseISO, subDays, eachDayOfInterval, format, 
 import { getCurrentDateRange, getPreviousDateRange } from '@/utils/dataProcessor';
 import type { SupabaseASINRow, SupabaseVendorRow } from '@/utils/supabaseDataFetchers';
 
-const VENDOR_LAG_DAYS = 3;
+export const VENDOR_LAG_DAYS = 3;
 
 /**
  * Get vendor-adjusted date range (offset by VENDOR_LAG_DAYS)

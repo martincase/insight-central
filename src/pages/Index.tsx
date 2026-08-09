@@ -62,6 +62,7 @@ import { isVendorAccount } from "@/utils/vendorUtils";
 import { fetchInventoryData, processInventoryData } from "@/utils/inventoryProcessor";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import { AccountCard } from "@/components/dashboard/AccountCard";
+import { getComparisonLabel } from "@/utils/comparisonLabels";
 import { AccountForm } from "@/components/dashboard/AccountForm";
 import { TargetNotifications } from "@/components/dashboard/TargetNotifications";
 import { SalesHeatmap } from "@/components/dashboard/SalesHeatmap";
@@ -318,6 +319,12 @@ const Index = () => {
     });
     return processedData;
   }, [asinData, accounts, focusedAccountId, dateFilter, customDateRange, supabaseVendorData]);
+
+  // Baseline named on every account card's change markers.
+  const accountComparisonLabel = useMemo(
+    () => getComparisonLabel(dateFilter, customDateRange),
+    [dateFilter, customDateRange]
+  );
 
   const focusedASINStaleInfo = useMemo(() => {
     const focusedAccount = accounts.find((acc) => acc.id === focusedAccountId);
@@ -1504,6 +1511,7 @@ const Index = () => {
                       apiPpcDailyData={focusedAccount ? apiPpcDailyData : undefined}
                       dateFilter={dateFilter}
                       scopedMetrics={focusedScopedMetricsForGrid}
+                      customDateRange={customDateRange}
                     />
                   </CollapsibleSection>
 
@@ -1968,6 +1976,7 @@ const Index = () => {
                     directOrganicMetrics={directOrganicMetrics}
                     directOrganicPreviousMetrics={directOrganicPreviousMetrics}
                     dateFilter={dateFilter}
+                    customDateRange={customDateRange}
                   />
 
                   {/* Status Filter - positioned above account cards */}
@@ -1993,6 +2002,7 @@ const Index = () => {
                           accountTags={accountTagsMap[account.merchantToken] || []}
                           needsAttention={att?.needsAttention}
                           attentionReasons={att?.reasons}
+                          comparisonLabel={accountComparisonLabel}
                         />
                       );
                     })}

@@ -12,7 +12,8 @@ import { MetricsCard } from './MetricsCard';
 import { getCurrencyInfo } from '@/utils/currencyUtils';
 import { getCountryName } from '@/utils/countryUtils';
 import { getAmazonProductUrl } from '@/utils/amazonUtils';
-import { getCurrentDateRange } from '@/utils/dataProcessor';
+import { getCurrentDateRange, getPreviousDateRange } from '@/utils/dataProcessor';
+import { buildComparisonLabel } from '@/utils/comparisonLabels';
 import type { DateFilter } from '@/types/dashboard';
 
 interface Props {
@@ -67,6 +68,22 @@ export function CountryScopedPerformance({
   const currentRange = useMemo(() => getCurrentDateRange(dateFilter, customDateRange), [dateFilter, customDateRange]);
   const pStart = useMemo(() => format(currentRange.from, 'yyyy-MM-dd'), [currentRange.from]);
   const pEnd = useMemo(() => format(currentRange.to, 'yyyy-MM-dd'), [currentRange.to]);
+  // The previous period is fetched inside useScopedMetrics, but the label needs
+  // it too. Derived from the same filter + custom range the hook is given, so
+  // the named baseline is by construction the one the figures came from.
+  const previousRange = useMemo(
+    () => getPreviousDateRange(dateFilter, customDateRange),
+    [dateFilter, customDateRange]
+  );
+
+  // Name the baseline on the card face. Built from the exact ranges this
+  // component queries, so the label can never drift from the figures.
+  const comparison = useMemo(
+    () => buildComparisonLabel(currentRange, previousRange, {
+      rolling: dateFilter === 'last-7-days' || dateFilter === 'last-14-days' || dateFilter === 'past-30-days',
+    }),
+    [currentRange, previousRange, dateFilter]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -244,15 +261,17 @@ export function CountryScopedPerformance({
               color="text-blue-600"
               currentValue={totalSales}
               previousValue={prevSales}
+              comparisonLabel={comparison}
               sparklineData={salesSpark}
               seriesSemantics="sum"
             />
             <MetricsCard
               title="Units Ordered"
               value={fmtNum(totalUnits)}
-              color="text-emerald-600"
+              color="text-indigo-600"
               currentValue={totalUnits}
               previousValue={prevUnits}
+              comparisonLabel={comparison}
               sparklineData={unitsSpark}
               seriesSemantics="sum"
             />
@@ -262,15 +281,17 @@ export function CountryScopedPerformance({
               color="text-blue-600"
               currentValue={totalPageViews}
               previousValue={prevPageViews}
+              comparisonLabel={comparison}
               sparklineData={pageViewsSpark}
               seriesSemantics="sum"
             />
             <MetricsCard
               title="Buy Box %"
               value={fmtPct(avgBuyBox)}
-              color="text-emerald-600"
+              color="text-violet-600"
               currentValue={avgBuyBox}
               previousValue={prevAvgBuyBox}
+              comparisonLabel={comparison}
               sparklineData={buyBoxSpark}
             />
             <MetricsCard
@@ -284,9 +305,11 @@ export function CountryScopedPerformance({
                     : 'Sessions are not reported for this account'
               }
               value={conversionAvailable ? fmtPct(avgConversion) : '—'}
-              color={conversionAvailable ? 'text-emerald-600' : 'text-muted-foreground'}
+              // Neutral hue, per fix/deltas: the headline no longer carries valence.
+              color={conversionAvailable ? 'text-fuchsia-600' : 'text-muted-foreground'}
               currentValue={conversionAvailable ? avgConversion : 0}
               previousValue={conversionAvailable ? prevAvgConversion : 0}
+              comparisonLabel={comparison}
               sparklineData={conversionAvailable ? conversionSpark : undefined}
             />
           </div>

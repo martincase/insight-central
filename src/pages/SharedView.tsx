@@ -1212,6 +1212,7 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
                       directOrganicMetrics={directOrganicMetrics}
                       directOrganicPreviousMetrics={directOrganicPreviousMetrics}
                       dateFilter={dateFilter}
+                      customDateRange={customDateRange}
                       // apiPpcDailyData drives the vendor KPI totals inside
                       // MetricsGrid, so it must be the SELECTED period. allDailyData
                       // is a >=30-day fetch buffer and produced a headline "Units

@@ -14,6 +14,7 @@ import { ClientAlertConfigDialog } from './ClientAlertConfigDialog';
 import { AccountTagBadges } from './AccountTagBadges';
 import type { AccountData } from '@/types/dashboard';
 import type { TagInfo } from '@/hooks/useAccountTags';
+import type { ComparisonLabel } from '@/utils/comparisonLabels';
 
 interface AccountCardProps {
   account: AccountData;
@@ -28,6 +29,8 @@ interface AccountCardProps {
   accountTags?: TagInfo[];
   needsAttention?: boolean;
   attentionReasons?: string[];
+  /** Baseline every change marker on this card is measured against. */
+  comparisonLabel?: ComparisonLabel;
 }
 
 export const AccountCard = ({ 
@@ -43,6 +46,7 @@ export const AccountCard = ({
   accountTags = [],
   needsAttention = false,
   attentionReasons = [],
+  comparisonLabel,
 }: AccountCardProps) => {
   const [alertDialogOpen, setAlertDialogOpen] = useState(false);
   const countryInfo = getCountryInfo(account.merchantToken);
@@ -135,6 +139,12 @@ export const AccountCard = ({
       </CardHeader>
       
       <CardContent className="space-y-4">
+        {comparisonLabel && (
+          <p className="text-[11px] text-muted-foreground -mt-1" title={comparisonLabel.detail}>
+            Change markers: {comparisonLabel.short}
+            {comparisonLabel.lengthNote ? ` · ${comparisonLabel.lengthNote}` : ''} · <span className="font-semibold">✓</span> better · <span className="font-semibold">✕</span> worse
+          </p>
+        )}
         <div className="grid grid-cols-2 gap-4">
           <div>
             <p className="text-sm text-muted-foreground">Sales</p>
@@ -143,6 +153,7 @@ export const AccountCard = ({
               <div className="flex items-center space-x-2">
                 <SalesSparkline merchantToken={account.merchantToken} sheetData={sheetData} />
                 <TrendIndicator 
+                  compact
                   currentValue={account.sales}
                   previousValue={account.previousPeriod?.sales || 0}
                 />
@@ -154,6 +165,8 @@ export const AccountCard = ({
             <div className="flex items-center justify-between">
               <p className="text-lg font-semibold text-orange-600">{formatCurrencyByMerchantToken(account.ppcSpend, account.merchantToken)}</p>
               <TrendIndicator 
+                compact
+                invertSentiment
                 currentValue={account.ppcSpend}
                 previousValue={account.previousPeriod?.ppcSpend || 0}
               />
@@ -164,6 +177,7 @@ export const AccountCard = ({
             <div className="flex items-center justify-between">
               <p className="text-lg font-semibold text-green-600">{formatCurrencyByMerchantToken(account.ppcSales, account.merchantToken)}</p>
               <TrendIndicator 
+                compact
                 currentValue={account.ppcSales}
                 previousValue={account.previousPeriod?.ppcSales || 0}
               />
@@ -174,6 +188,8 @@ export const AccountCard = ({
             <div className="flex items-center justify-between">
               <p className="text-lg font-semibold text-purple-600">{formatPercentage(account.acos)}</p>
               <TrendIndicator 
+                compact
+                invertSentiment
                 currentValue={account.acos}
                 previousValue={account.previousPeriod?.acos || 0}
                 isPercentage={true}
@@ -188,6 +204,8 @@ export const AccountCard = ({
             <div className="flex items-center space-x-2">
               <span className="text-lg font-semibold text-cyan-600">{formatPercentage(account.tacos)}</span>
               <TrendIndicator 
+                compact
+                invertSentiment
                 currentValue={account.tacos}
                 previousValue={account.previousPeriod?.tacos || 0}
                 isPercentage={true}

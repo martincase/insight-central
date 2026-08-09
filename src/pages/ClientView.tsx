@@ -513,6 +513,7 @@ const ClientView = () => {
                     directOrganicMetrics={directOrganicMetrics}
                     directOrganicPreviousMetrics={directOrganicPreviousMetrics}
                     dateFilter={dateFilter}
+                    customDateRange={customDateRange}
                   />
                 )
               )}
