@@ -3,7 +3,7 @@ import type { ApiPpcDailyRow } from '@/hooks/useApiPpcData';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { format, subDays, eachDayOfInterval, subWeeks, startOfWeek, endOfWeek, eachWeekOfInterval, startOfMonth, endOfMonth, subMonths, startOfYear, differenceInDays, isToday, isYesterday } from 'date-fns';
+import { format, subDays, eachDayOfInterval, subWeeks, startOfWeek, endOfWeek, eachWeekOfInterval, startOfMonth, endOfMonth, subMonths, startOfYear, differenceInCalendarDays, isToday, isYesterday } from 'date-fns';
 import { formatCurrency, formatPercentage } from '@/utils/formatters';
 import { getBlurredDisplayName } from '@/utils/blurUtils';
 import { cn } from '@/lib/utils';
@@ -33,8 +33,6 @@ interface SalesHeatmapProps {
 type MetricType = 'sales' | 'ppcSpend' | 'ppcSales' | 'acos' | 'tacos' | 'unitsOrdered' | 'pageViews' | 'buyBoxPercentage' | 'conversionRate';
 type ViewType = 'daily' | 'weekly';
 
-const VENDOR_LAG_DAYS = 3;
-
 const METRIC_OPTIONS = [
   { value: 'sales' as MetricType, label: 'Sales' },
   { value: 'ppcSpend' as MetricType, label: 'PPC Spend' },
@@ -48,6 +46,55 @@ const METRIC_OPTIONS = [
 ];
 
 const VENDOR_EXCLUDED_METRICS = ['pageViews', 'buyBoxPercentage', 'conversionRate'];
+
+/**
+ * Accessible monochrome-blue heatmap ramp.
+ *
+ * Kept deliberately monochrome (safe for deuteranopia / protanopia). The ramp is
+ * spread across the widest usable luminance range (relative luminance 0.81 -> 0.05,
+ * i.e. an 8.5:1 span, vs the previous blue-100 -> blue-500 span of 3.0:1) so that
+ * adjacent steps are as separable as a 5-step sequential scale can be.
+ *
+ * Ink is chosen per step so every cell's label clears WCAG AA (4.5:1):
+ *   #dbeafe + #0a1633 = 14.6:1
+ *   #7bb6fc + #0a1633 =  8.5:1
+ *   #3b82f6 + #0a1633 =  4.9:1
+ *   #2055df + #ffffff =  6.1:1
+ *   #1e3a8a + #ffffff = 10.4:1
+ */
+const HEATMAP_INK_DARK = '#0a1633';
+const HEATMAP_INK_LIGHT = '#ffffff';
+
+const HEATMAP_RAMP: { bg: string; fg: string; label: string }[] = [
+  { bg: '#dbeafe', fg: HEATMAP_INK_DARK, label: 'weakest' },
+  { bg: '#7bb6fc', fg: HEATMAP_INK_DARK, label: 'weak' },
+  { bg: '#3b82f6', fg: HEATMAP_INK_DARK, label: 'mid' },
+  { bg: '#2055df', fg: HEATMAP_INK_LIGHT, label: 'strong' },
+  { bg: '#1e3a8a', fg: HEATMAP_INK_LIGHT, label: 'strongest' },
+];
+
+// "No data" is encoded with a diagonal hatch, NOT just a pale colour, so an empty
+// day can never be mistaken for a bad day. Ink clears 4.5:1 on both the base and
+// the hatch lines (13.4:1 and 5.7:1).
+const HEATMAP_NO_DATA_STYLE: React.CSSProperties = {
+  backgroundColor: '#f1f5f9',
+  backgroundImage:
+    'repeating-linear-gradient(45deg, #94a3b8 0, #94a3b8 1px, transparent 1px, transparent 6px)',
+  color: '#1e293b',
+};
+
+/**
+ * `hasValue` must drive the hatch, NOT `intensity === 0`. For the inverse metrics
+ * (ACOS / TACOS) intensity is `1 - value/max`, so the single WORST day in the window
+ * lands on exactly 0 — which would paint a real, reported, bad day as "no data".
+ */
+const getCellStyle = (intensity: number, hasValue: boolean): React.CSSProperties => {
+  if (!hasValue) return HEATMAP_NO_DATA_STYLE;
+  const i = Number.isFinite(intensity) ? Math.min(Math.max(intensity, 0), 1) : 0;
+  const idx = i < 0.2 ? 0 : i < 0.4 ? 1 : i < 0.6 ? 2 : i < 0.8 ? 3 : 4;
+  const step = HEATMAP_RAMP[idx];
+  return { backgroundColor: step.bg, color: step.fg };
+};
 
 // Metrics where lower values = better performance
 const INVERSE_METRICS: MetricType[] = ['acos', 'tacos'];
@@ -162,7 +209,34 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
     }
     return map;
   }, [apiPpcDailyData]);
-  
+
+  // Latest date for which the underlying sources actually hold a row for the
+  // account(s) on screen. Used to tell the reader where real data stops instead of
+  // silently rendering a short/blank tail.
+  const lastDataDate = useMemo(() => {
+    const tokens = new Set(accounts.map(a => a.merchantToken));
+    let maxIso = '';
+
+    for (const row of supabaseVendorData) {
+      if (!row?.record_date || !tokens.has(row.merchant_token)) continue;
+      if (typeof row.record_date === 'string' && row.record_date > maxIso) maxIso = row.record_date;
+    }
+
+    for (let i = 1; i < sheetData.length; i++) {
+      const row = sheetData[i];
+      if (!row) continue;
+      const iso = row[1];
+      if (typeof iso !== 'string' || iso.length < 10 || !iso.includes('-')) continue;
+      if (!tokens.has(row[3])) continue;
+      if (iso > maxIso) maxIso = iso;
+    }
+
+    if (!maxIso) return null;
+    const [y, m, d] = maxIso.slice(0, 10).split('-').map(Number);
+    if (!y || !m || !d) return null;
+    return new Date(y, m - 1, d);
+  }, [accounts, sheetData, supabaseVendorData]);
+
   // Check if any data source is available (sheets for sellers, supabase for vendors)
   const hasAnyVendorAccount = accounts.some(a => isVendorAccount(a.merchantToken));
   if (sheetData.length === 0 && !(hasAnyVendorAccount && supabaseVendorData.length > 0)) {
@@ -180,30 +254,31 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
     );
   }
 
-  // Generate date ranges based on view type and dateFilter
+  // Generate date ranges based on view type and dateFilter.
+  //
+  // NOTE: this deliberately does NOT shift the window by the vendor reporting lag. Vendor
+  // reporting lags ~3 days, but sliding the whole grid back 3 days made the columns
+  // disagree with the selected range shown in the page header (and silently dropped
+  // the last 3 days of the range from the grid, so the cells no longer summed to the
+  // KPI). The grid now renders exactly the selected range; the lag is surfaced as an
+  // explicit "Data to <date>" note instead.
   const getDateRanges = () => {
     const today = new Date();
     const yesterday = subDays(today, 1);
-    
+
     if (viewType === 'weekly') {
       // For weekly view
       if (dateFilter === 'this-year') {
         const yearStart = startOfYear(today);
         const lastWeek = subWeeks(today, 1);
-        return eachWeekOfInterval({
-          start: shouldApplyVendorLag ? subDays(yearStart, VENDOR_LAG_DAYS) : yearStart,
-          end: shouldApplyVendorLag ? subDays(lastWeek, VENDOR_LAG_DAYS) : lastWeek,
-        }, { weekStartsOn: 1 });
+        return eachWeekOfInterval({ start: yearStart, end: lastWeek }, { weekStartsOn: 1 });
       }
       // Default: 8 weeks
       const lastWeek = subWeeks(today, 1);
       const startWeek = subWeeks(lastWeek, 7);
-       return eachWeekOfInterval({
-         start: shouldApplyVendorLag ? subDays(startWeek, VENDOR_LAG_DAYS) : startWeek,
-         end: shouldApplyVendorLag ? subDays(lastWeek, VENDOR_LAG_DAYS) : lastWeek,
-       }, { weekStartsOn: 1 });
+      return eachWeekOfInterval({ start: startWeek, end: lastWeek }, { weekStartsOn: 1 });
     }
-    
+
     // For daily view - determine days based on dateFilter
     let startDate: Date;
     let endDate: Date = yesterday;
@@ -256,23 +331,40 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
         startDate = subDays(yesterday, 13);
     }
 
-    if (shouldApplyVendorLag) {
-      startDate = subDays(startDate, VENDOR_LAG_DAYS);
-      endDate = subDays(endDate, VENDOR_LAG_DAYS);
-    }
+    if (endDate < startDate) endDate = startDate;
 
     return eachDayOfInterval({ start: startDate, end: endDate });
   };
 
   const dateRange = getDateRanges();
-  
-  // Get display title based on dateFilter
+  const rangeStart = dateRange[0];
+  const rangeEnd = dateRange[dateRange.length - 1];
+
+  // Title must describe what is actually on screen, not what was requested.
   const getHeatmapTitle = () => {
     if (viewType === 'weekly') {
-      return `Metrics Heatmap (${dateRange.length} Weeks)`;
+      return `Metrics Heatmap (${dateRange.length} ${dateRange.length === 1 ? 'Week' : 'Weeks'})`;
     }
-    return `Metrics Heatmap (${dateRange.length} Days)`;
+    return `Metrics Heatmap (${dateRange.length} ${dateRange.length === 1 ? 'Day' : 'Days'})`;
   };
+
+  // Explicit range label so the grid can be checked against the page header.
+  const rangeLabel = rangeStart && rangeEnd
+    ? viewType === 'weekly'
+      ? `${format(startOfWeek(rangeStart, { weekStartsOn: 1 }), 'd MMM')} – ${format(endOfWeek(rangeEnd, { weekStartsOn: 1 }), 'd MMM yyyy')}`
+      : `${format(rangeStart, 'd MMM')} – ${format(rangeEnd, 'd MMM yyyy')}`
+    : '';
+
+  // If the selected range runs past the last day we hold data for, say so.
+  const coverageEnd = viewType === 'weekly' && rangeEnd
+    ? endOfWeek(rangeEnd, { weekStartsOn: 1 })
+    : rangeEnd;
+  const missingTailDays = lastDataDate && coverageEnd
+    ? differenceInCalendarDays(coverageEnd, lastDataDate)
+    : 0;
+  const coverageNote = lastDataDate && missingTailDays > 0
+    ? `Data to ${format(lastDataDate, 'd MMM')} — the last ${missingTailDays} ${missingTailDays === 1 ? 'day' : 'days'} of this range ${missingTailDays === 1 ? 'is' : 'are'} not reported yet.`
+    : null;
 
   // Helper function to get PPC data for a given date and account
   const getPPCDataForDate = (dateStr: string, account: AccountData) => {
@@ -703,19 +795,6 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
     };
   }) : [];
 
-  const getIntensityColor = (intensity: number) => {
-    if (intensity === 0) return 'bg-gray-100';
-    if (intensity < 0.2) return 'bg-blue-100';
-    if (intensity < 0.4) return 'bg-blue-200';
-    if (intensity < 0.6) return 'bg-blue-300';
-    if (intensity < 0.8) return 'bg-blue-400';
-    return 'bg-blue-500';
-  };
-
-  const getTextColor = (intensity: number) => {
-    return intensity >= 0.6 ? 'text-white' : 'text-gray-700';
-  };
-
   const PENDING_ELIGIBLE_METRICS: MetricType[] = ['pageViews', 'buyBoxPercentage', 'conversionRate'];
 
   const formatMetricValue = (value: number, metric: MetricType, date?: Date) => {
@@ -789,8 +868,8 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
             </CardTitle>
             <p className="hidden md:block text-sm text-gray-600">
               {isFocusedMode
-                ? `${viewType === 'daily' ? 'Daily' : 'Weekly'} performance across all metrics — all metrics on a blue scale where darker = better; for ACOS & TACOS, lower values are the strongest blue`
-                : `${viewType === 'daily' ? 'Daily' : 'Weekly'} performance by account — all metrics on a blue scale where darker = better; for ACOS & TACOS, lower values are the strongest blue — Click account name to focus`
+                ? `${viewType === 'daily' ? 'Daily' : 'Weekly'} performance across all metrics`
+                : `${viewType === 'daily' ? 'Daily' : 'Weekly'} performance by account — click an account name to focus`
               }
             </p>
           </div>
@@ -862,17 +941,53 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
           </div>
         </div>
       </CardHeader>
-      <CardContent className="px-2 py-2 md:px-6 md:py-4">
-        <div className="space-y-2 overflow-x-auto">
+      <CardContent className="px-2 py-2 md:px-6 md:py-4 min-w-0 max-w-full overflow-hidden">
+        {/* Scale key + reversal note sit ABOVE the grid: you need them to read a cell,
+            so they must not be 250px further down the page. */}
+        <div className="mb-2 md:mb-3 flex flex-col gap-1.5 text-[11px] md:text-xs text-gray-700">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <div className="flex items-center gap-1.5">
+              <span className="text-gray-600">Weaker</span>
+              <div className="flex items-center gap-0.5" role="img" aria-label="Blue intensity scale from weaker to stronger">
+                {HEATMAP_RAMP.map(step => (
+                  <div
+                    key={step.bg}
+                    className="w-3 h-3 md:w-3.5 md:h-3.5 rounded-sm border border-black/10"
+                    style={{ backgroundColor: step.bg }}
+                  />
+                ))}
+              </div>
+              <span className="text-gray-600">Stronger</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <div
+                className="w-3 h-3 md:w-3.5 md:h-3.5 rounded-sm border border-black/10"
+                style={HEATMAP_NO_DATA_STYLE}
+              />
+              <span className="text-gray-600">Hatched = no data</span>
+            </div>
+          </div>
+          <div className="text-gray-700">
+            Darker blue = better. For <strong className="font-semibold">ACOS &amp; TACOS lower is better</strong>, so the lowest values are the darkest blue.
+          </div>
+          {rangeLabel && (
+            <div className="text-gray-600">
+              Showing {rangeLabel}
+              {coverageNote ? <span className="text-amber-700 font-medium"> · {coverageNote}</span> : null}
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-2 w-full max-w-full overflow-x-auto overscroll-x-contain">
           {isFocusedMode ? (
             // Focused mode: Show all metrics vertically
             <>
               {/* Date headers */}
               <div className="flex min-w-max">
-                <div className="w-20 md:w-32 text-[10px] md:text-sm font-medium text-gray-600 py-1.5 md:py-2 sticky left-0 z-10 bg-background flex-shrink-0">Metric</div>
+                <div className="w-20 md:w-32 text-[11px] md:text-sm font-medium text-gray-700 py-1.5 md:py-2 sticky left-0 z-10 bg-background flex-shrink-0">Metric</div>
                 <div className="flex gap-0.5 md:gap-1">
                   {dateRange.map(date => (
-                    <div key={date.toISOString()} className={cn("text-[9px] md:text-xs text-gray-600 text-center py-1.5 md:py-2", viewType === 'weekly' ? "w-14 md:w-20" : "w-10 md:w-16")}>
+                    <div key={date.toISOString()} className={cn("text-[11px] md:text-xs text-gray-700 text-center py-1.5 md:py-2 flex-shrink-0", viewType === 'weekly' ? "w-14 md:w-20" : "w-12 md:w-16")}>
                       {viewType === 'weekly' ? (
                         <>
                           <div>W{format(date, 'w')}</div>
@@ -892,7 +1007,7 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
               {/* Metric rows */}
               {focusedMetricsData.map(({ metric, dailyMetrics }) => (
                 <div key={metric.value} className="flex min-w-max">
-                  <div className="w-20 md:w-32 text-[10px] md:text-sm font-medium text-gray-800 py-2 md:py-3 px-1 md:px-2 bg-gray-50 rounded flex items-center sticky left-0 z-10 flex-shrink-0">
+                  <div className="w-20 md:w-32 text-[11px] md:text-sm font-medium text-gray-900 py-2 md:py-3 px-1 md:px-2 bg-gray-50 rounded flex items-center sticky left-0 z-10 flex-shrink-0">
                     <div className="truncate" title={metric.label}>
                       {metric.label}
                     </div>
@@ -902,19 +1017,15 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
                       <div
                         key={date.toISOString()}
                         className={cn(
-                          "py-2 md:py-3 px-0.5 md:px-1 rounded text-center cursor-pointer transition-all hover:scale-105",
-                          viewType === 'weekly' ? "w-14 md:w-20" : "w-10 md:w-16",
-                          getIntensityColor(intensity),
-                          getTextColor(intensity)
+                          "py-2 md:py-3 px-0.5 md:px-1 rounded text-center cursor-pointer transition-transform hover:scale-105 flex-shrink-0",
+                          viewType === 'weekly' ? "w-14 md:w-20" : "w-12 md:w-16"
                         )}
+                        style={getCellStyle(intensity, value !== 0)}
                         title={value === 0 && PENDING_ELIGIBLE_METRICS.includes(metric.value) && (isToday(date) || isYesterday(date))
                           ? `Awaiting data (reporting lag) — ${metric.label} for ${format(date, 'dd/MM/yyyy')}`
                           : `${metric.label} - ${viewType === 'weekly' ? `Week ${format(date, 'w')} (${format(startOfWeek(date, { weekStartsOn: 1 }), 'dd/MM')} - ${format(endOfWeek(date, { weekStartsOn: 1 }), 'dd/MM')})` : format(date, 'dd/MM/yyyy')}: ${getTooltipValue(value, metric.value)}`}
                       >
-                        <div className={cn(
-                          "text-[9px] md:text-xs font-medium",
-                          value === 0 && PENDING_ELIGIBLE_METRICS.includes(metric.value) && (isToday(date) || isYesterday(date)) && "text-muted-foreground/60"
-                        )}>
+                        <div className="text-[11px] md:text-xs font-medium leading-tight">
                           {formatMetricValue(value, metric.value, date)}
                         </div>
                       </div>
@@ -928,10 +1039,10 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
             <>
               {/* Date headers */}
               <div className="flex min-w-max">
-                <div className="w-28 md:w-48 text-[10px] md:text-sm font-medium text-gray-600 py-1.5 md:py-2 sticky left-0 z-10 bg-background flex-shrink-0">Account</div>
+                <div className="w-28 md:w-48 text-[11px] md:text-sm font-medium text-gray-700 py-1.5 md:py-2 sticky left-0 z-10 bg-background flex-shrink-0">Account</div>
                 <div className="flex gap-0.5 md:gap-1">
                   {dateRange.map(date => (
-                    <div key={date.toISOString()} className={cn("text-[9px] md:text-xs text-gray-600 text-center py-1.5 md:py-2", viewType === 'weekly' ? "w-14 md:w-20" : "w-10 md:w-16")}>
+                    <div key={date.toISOString()} className={cn("text-[11px] md:text-xs text-gray-700 text-center py-1.5 md:py-2 flex-shrink-0", viewType === 'weekly' ? "w-14 md:w-20" : "w-12 md:w-16")}>
                       {viewType === 'weekly' ? (
                         <>
                           <div>W{format(date, 'w')}</div>
@@ -952,7 +1063,7 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
               {accountMetricsData.map(({ account, dailyMetrics }) => (
                 <div key={account.id} className="flex min-w-max">
                   <div 
-                    className="w-28 md:w-48 text-[10px] md:text-sm font-medium text-gray-800 py-2 md:py-3 px-1 md:px-2 bg-gray-50 rounded flex items-center cursor-pointer hover:bg-gray-100 transition-colors sticky left-0 z-10 flex-shrink-0"
+                    className="w-28 md:w-48 text-[11px] md:text-sm font-medium text-gray-900 py-2 md:py-3 px-1 md:px-2 bg-gray-50 rounded flex items-center cursor-pointer hover:bg-gray-100 transition-colors sticky left-0 z-10 flex-shrink-0"
                     onClick={() => handleAccountClick(account.id)}
                   >
                     <div className="truncate" title={isBlurred ? account.name : getDisplayName(account)}>
@@ -967,14 +1078,13 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
                       <div
                         key={date.toISOString()}
                         className={cn(
-                          "py-2 md:py-3 px-0.5 md:px-1 rounded text-center cursor-pointer transition-all hover:scale-105",
-                          viewType === 'weekly' ? "w-14 md:w-20" : "w-10 md:w-16",
-                          getIntensityColor(intensity),
-                          getTextColor(intensity)
+                          "py-2 md:py-3 px-0.5 md:px-1 rounded text-center cursor-pointer transition-transform hover:scale-105 flex-shrink-0",
+                          viewType === 'weekly' ? "w-14 md:w-20" : "w-12 md:w-16"
                         )}
+                        style={getCellStyle(intensity, value !== 0)}
                         title={`${getDisplayName(account)} - ${viewType === 'weekly' ? `Week ${format(date, 'w')} (${format(startOfWeek(date, { weekStartsOn: 1 }), 'dd/MM')} - ${format(endOfWeek(date, { weekStartsOn: 1 }), 'dd/MM')})` : format(date, 'dd/MM/yyyy')}: ${getTooltipValue(value, selectedMetric)}`}
                       >
-                        <div className="text-[9px] md:text-xs font-medium">
+                        <div className="text-[11px] md:text-xs font-medium leading-tight">
                           {formatMetricValue(value, selectedMetric, date)}
                         </div>
                       </div>
@@ -986,24 +1096,6 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
           )}
         </div>
 
-        {/* Legend */}
-        <div className="mt-3 md:mt-4 flex flex-col items-center gap-2 text-[10px] md:text-xs text-gray-600">
-          <div className="flex flex-wrap items-center justify-center gap-3">
-            <div className="flex items-center gap-1">
-              <div className="w-2.5 h-2.5 md:w-3 md:h-3 bg-blue-100 rounded" />
-              <div className="w-2.5 h-2.5 md:w-3 md:h-3 bg-blue-300 rounded" />
-              <div className="w-2.5 h-2.5 md:w-3 md:h-3 bg-blue-500 rounded" />
-              <span className="text-muted-foreground">higher = better (darker blue)</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <div className="w-2.5 h-2.5 md:w-3 md:h-3 bg-gray-100 rounded" />
-              <span>None / Awaiting data</span>
-            </div>
-          </div>
-          <div className="text-muted-foreground text-[10px] md:text-xs">
-            Note: for ACOS & TACOS, lower is better — shown as the darkest blue.
-          </div>
-        </div>
       </CardContent>
     </Card>
   );
