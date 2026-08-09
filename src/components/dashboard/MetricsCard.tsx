@@ -3,6 +3,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { TrendIndicator } from './TrendIndicator';
 import { InfoTooltip } from '@/components/common/InfoTooltip';
 import { LineChart, Line, ResponsiveContainer } from 'recharts';
+import { checkTotalAgainstSeries } from '@/utils/kpiIntegrity';
 
 interface MetricsCardProps {
   title: string;
@@ -19,6 +20,14 @@ interface MetricsCardProps {
   /** Optional explainer shown via standardised ⓘ hover tooltip. */
   info?: React.ReactNode;
   subtitle?: React.ReactNode;
+  /**
+   * Set to 'sum' on additive metrics (sales, units, page views) whose
+   * sparklineData is the same daily series the headline was totalled from.
+   * The card then refuses to print a headline that disagrees with its own
+   * series rather than showing a number nobody can reconcile.
+   * Leave unset for ratios and averages, which legitimately do not sum.
+   */
+  seriesSemantics?: 'sum' | 'average';
 }
 
 export const MetricsCard = ({
@@ -35,7 +44,12 @@ export const MetricsCard = ({
   invertSentiment = false,
   info,
   subtitle,
+  seriesSemantics,
 }: MetricsCardProps) => {
+  const sumCheck = seriesSemantics === 'sum'
+    ? checkTotalAgainstSeries(currentValue, sparklineData)
+    : null;
+  const sumMismatch = !!sumCheck && !sumCheck.ok;
   const chartData = sparklineData?.map((v, i) => ({ v, i }));
   const isUpward = sparklineData && sparklineData.length >= 2
     ? sparklineData[sparklineData.length - 1] >= sparklineData[0]
@@ -73,10 +87,19 @@ export const MetricsCard = ({
 
           {/* Value + Sparkline */}
           <div className="flex items-end justify-between gap-1 md:gap-2">
-            <div className={`text-lg md:text-2xl font-bold tracking-tight ${color} ${onClick ? 'group-hover:scale-105' : ''} transition-transform duration-200`}>
-              {value}
-            </div>
-            {chartData && chartData.length > 1 && (
+            {sumMismatch ? (
+              <div className="text-xs md:text-sm font-semibold text-red-600 leading-tight">
+                Unavailable
+                <span className="block text-[10px] md:text-[11px] font-normal text-red-500">
+                  Total disagrees with the daily figures — withheld
+                </span>
+              </div>
+            ) : (
+              <div className={`text-lg md:text-2xl font-bold tracking-tight ${color} ${onClick ? 'group-hover:scale-105' : ''} transition-transform duration-200`}>
+                {value}
+              </div>
+            )}
+            {!sumMismatch && chartData && chartData.length > 1 && (
               <div className="w-14 h-6 md:w-20 md:h-8 flex-shrink-0">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={chartData}>

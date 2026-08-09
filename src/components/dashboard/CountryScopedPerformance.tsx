@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { format, eachDayOfInterval, parseISO } from 'date-fns';
+import { format } from 'date-fns';
 import { supabase } from '@/integrations/supabase/client';
+import { useScopedMetrics } from '@/hooks/useScopedMetrics';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -11,7 +12,7 @@ import { MetricsCard } from './MetricsCard';
 import { getCurrencyInfo } from '@/utils/currencyUtils';
 import { getCountryName } from '@/utils/countryUtils';
 import { getAmazonProductUrl } from '@/utils/amazonUtils';
-import { getCurrentDateRange, getPreviousDateRange } from '@/utils/dataProcessor';
+import { getCurrentDateRange } from '@/utils/dataProcessor';
 import type { DateFilter } from '@/types/dashboard';
 
 interface Props {
@@ -22,16 +23,6 @@ interface Props {
   accountMerchantToken?: string;
 }
 
-interface TsRow {
-  bucket: string;
-  units: number;
-  sales_gbp: number;
-  sales_native?: number | null;
-  currency?: string | null;
-  page_views?: number | null;
-  buy_box_pct?: number | null;
-  conversion?: number | null;
-}
 interface AsinRow {
   child_asin: string;
   units_sold: number;
@@ -58,12 +49,13 @@ export function CountryScopedPerformance({
   customDateRange,
   accountMerchantToken,
 }: Props) {
-  const [tsCurrent, setTsCurrent] = useState<TsRow[]>([]);
-  const [tsPrev, setTsPrev] = useState<TsRow[]>([]);
   const [asinRows, setAsinRows] = useState<AsinRow[] | null>(null);
-  const [loading, setLoading] = useState(true);
   const [asinLoading, setAsinLoading] = useState(true);
   const [showAll, setShowAll] = useState(false);
+
+  // Single scoped source, shared with the KPI grid so the two cannot disagree.
+  const scopedMetrics = useScopedMetrics(spid, scope, dateFilter, customDateRange);
+  const { totals, previousTotals, series, days, loading, error: scopeError } = scopedMetrics;
 
   const cur = getCurrencyInfo(scope);
   const isRollup = scope === 'ALL' || scope === 'ALL_EU';
@@ -73,33 +65,8 @@ export function CountryScopedPerformance({
   const fmtNum = (v: number) => new Intl.NumberFormat(cur.locale).format(Math.round(v ?? 0));
 
   const currentRange = useMemo(() => getCurrentDateRange(dateFilter, customDateRange), [dateFilter, customDateRange]);
-  const previousRange = useMemo(() => getPreviousDateRange(dateFilter, customDateRange), [dateFilter, customDateRange]);
   const pStart = useMemo(() => format(currentRange.from, 'yyyy-MM-dd'), [currentRange.from]);
   const pEnd = useMemo(() => format(currentRange.to, 'yyyy-MM-dd'), [currentRange.to]);
-  const ppStart = useMemo(() => format(previousRange.from, 'yyyy-MM-dd'), [previousRange.from]);
-  const ppEnd = useMemo(() => format(previousRange.to, 'yyyy-MM-dd'), [previousRange.to]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    (async () => {
-      try {
-        const [curRes, prevRes] = await Promise.all([
-          (supabase.rpc as any)('rpc_metrics_daily_country', { p_spid: spid, p_scope: scope, p_start: pStart, p_end: pEnd }),
-          (supabase.rpc as any)('rpc_metrics_daily_country', { p_spid: spid, p_scope: scope, p_start: ppStart, p_end: ppEnd }),
-        ]);
-        if (cancelled) return;
-        setTsCurrent((curRes.data as any) || []);
-        setTsPrev((prevRes.data as any) || []);
-      } catch (e) {
-        console.error('CountryScopedPerformance timeseries error', e);
-        if (!cancelled) { setTsCurrent([]); setTsPrev([]); }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [spid, scope, pStart, pEnd, ppStart, ppEnd]);
 
   useEffect(() => {
     let cancelled = false;
@@ -122,30 +89,24 @@ export function CountryScopedPerformance({
     return () => { cancelled = true; };
   }, [spid, scope, pStart, pEnd]);
 
-  const days = useMemo(() => eachDayOfInterval({ start: currentRange.from, end: currentRange.to }), [currentRange.from, currentRange.to]);
-  const byDay = useMemo(() => {
-    const m = new Map<string, TsRow>();
-    for (const r of tsCurrent) {
-      const k = format(parseISO(r.bucket), 'yyyy-MM-dd');
-      m.set(k, r);
-    }
-    return m;
-  }, [tsCurrent]);
-
-  const rowVal = (r: TsRow) => (r.currency ? Number(r.sales_native || 0) : Number(r.sales_gbp || 0));
-  const totalSales = tsCurrent.reduce((s, r) => s + rowVal(r), 0);
-  const totalUnits = tsCurrent.reduce((s, r) => s + (Number(r.units) || 0), 0);
-  const prevSales = tsPrev.reduce((s, r) => s + rowVal(r), 0);
-  const prevUnits = tsPrev.reduce((s, r) => s + (Number(r.units) || 0), 0);
-
-  const salesSpark = days.map(d => {
-    const r = byDay.get(format(d, 'yyyy-MM-dd'));
-    return r ? rowVal(r) : 0;
+  const salesSpark = series.sales;
+  const unitsSpark = series.units;
+  const pageViewsSpark = series.pageViews;
+  const sessionsSpark = series.sessions;
+  const buyBoxSpark = series.buyBox;
+  // Per-day conversion from the same two series the totals use: units ÷ sessions.
+  // Never units ÷ page views, and never a stored per-row rate.
+  const conversionSpark = unitsSpark.map((u, i) => {
+    const s = sessionsSpark[i] || 0;
+    if (s <= 0) return 0;
+    const pct = (u / s) * 100;
+    return pct > 100 ? 0 : pct; // impossible values are not plotted
   });
-  const unitsSpark = days.map(d => Number(byDay.get(format(d, 'yyyy-MM-dd'))?.units || 0));
-  const pageViewsSpark = days.map(d => Number(byDay.get(format(d, 'yyyy-MM-dd'))?.page_views || 0));
-  const buyBoxSpark = days.map(d => Number(byDay.get(format(d, 'yyyy-MM-dd'))?.buy_box_pct || 0));
-  const conversionSpark = days.map(d => Number(byDay.get(format(d, 'yyyy-MM-dd'))?.conversion || 0));
+
+  const totalSales = totals?.sales ?? 0;
+  const totalUnits = totals?.unitsOrdered ?? 0;
+  const prevSales = previousTotals?.sales ?? 0;
+  const prevUnits = previousTotals?.unitsOrdered ?? 0;
 
   const maxSales = Math.max(1, ...salesSpark);
   const maxUnits = Math.max(1, ...unitsSpark);
@@ -153,19 +114,16 @@ export function CountryScopedPerformance({
   const maxBuyBox = Math.max(1, ...buyBoxSpark);
   const maxConversion = Math.max(1, ...conversionSpark);
 
-  const avgOf = (arr: number[]) => {
-    const nz = arr.filter(v => v > 0);
-    return nz.length ? nz.reduce((s, v) => s + v, 0) / nz.length : 0;
-  };
-  const totalPageViews = pageViewsSpark.reduce((s, v) => s + v, 0);
-  const avgBuyBox = avgOf(buyBoxSpark);
-  const avgConversion = avgOf(conversionSpark);
+  const totalPageViews = totals?.pageViews ?? 0;
+  const avgBuyBox = totals?.buyBoxPercentage ?? 0;
+  const conversionAvailable = !!totals && totals.conversionRate != null && !totals.conversionImplausible;
+  const avgConversion = conversionAvailable ? (totals!.conversionRate as number) : 0;
 
-  const prevPageViews = tsPrev.reduce((s, r) => s + Number(r.page_views || 0), 0);
-  const prevBuyBoxArr = tsPrev.map(r => Number(r.buy_box_pct || 0));
-  const prevConversionArr = tsPrev.map(r => Number(r.conversion || 0));
-  const prevAvgBuyBox = avgOf(prevBuyBoxArr);
-  const prevAvgConversion = avgOf(prevConversionArr);
+  const prevPageViews = previousTotals?.pageViews ?? 0;
+  const prevAvgBuyBox = previousTotals?.buyBoxPercentage ?? 0;
+  const prevAvgConversion = previousTotals && !previousTotals.conversionImplausible
+    ? (previousTotals.conversionRate ?? 0)
+    : 0;
 
   const fmtPct = (v: number) => `${(v ?? 0).toFixed(1)}%`;
 
@@ -185,6 +143,20 @@ export function CountryScopedPerformance({
   }, [asinRows, isRollup]);
 
   const displayedAsins = showAll ? sortedAsins : sortedAsins.slice(0, 10);
+
+  if (scopeError) {
+    return (
+      <Card className="border-red-300 bg-red-50">
+        <CardContent className="p-4 text-sm text-red-800">
+          <div className="font-medium">Could not load {scopeLabel(scope)} figures</div>
+          <div className="text-xs mt-1">{scopeError}</div>
+          <div className="text-xs mt-1">
+            Nothing is shown rather than the home marketplace's numbers under this country's name.
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <>
@@ -226,8 +198,10 @@ export function CountryScopedPerformance({
                       { label: 'Sales', spark: salesSpark, max: maxSales, base: '#2563EB', fmt: fmtMoney },
                       { label: 'Units', spark: unitsSpark, max: maxUnits, base: '#10B981', fmt: fmtNum },
                       { label: 'Page Views', spark: pageViewsSpark, max: maxPageViews, base: '#2563EB', fmt: fmtNum },
+                      ...(totals?.hasSessions ? [{ label: 'Sessions', spark: sessionsSpark, max: Math.max(1, ...sessionsSpark), base: '#2563EB', fmt: fmtNum }] : []),
                       { label: 'Buy Box %', spark: buyBoxSpark, max: maxBuyBox, base: '#10B981', fmt: fmtPct },
-                      { label: 'Conversion %', spark: conversionSpark, max: maxConversion, base: '#10B981', fmt: fmtPct },
+                      // Blank for vendors and for any day where units exceed sessions.
+                      ...(totals?.hasSessions ? [{ label: 'Conversion %', spark: conversionSpark, max: maxConversion, base: '#10B981', fmt: fmtPct }] : []),
                     ].map(row => (
                       <tr key={row.label}>
                         <td className="p-2 font-medium sticky left-0 bg-background z-10">{row.label}</td>
@@ -271,6 +245,7 @@ export function CountryScopedPerformance({
               currentValue={totalSales}
               previousValue={prevSales}
               sparklineData={salesSpark}
+              seriesSemantics="sum"
             />
             <MetricsCard
               title="Units Ordered"
@@ -279,6 +254,7 @@ export function CountryScopedPerformance({
               currentValue={totalUnits}
               previousValue={prevUnits}
               sparklineData={unitsSpark}
+              seriesSemantics="sum"
             />
             <MetricsCard
               title="Page Views"
@@ -287,6 +263,7 @@ export function CountryScopedPerformance({
               currentValue={totalPageViews}
               previousValue={prevPageViews}
               sparklineData={pageViewsSpark}
+              seriesSemantics="sum"
             />
             <MetricsCard
               title="Buy Box %"
@@ -298,11 +275,19 @@ export function CountryScopedPerformance({
             />
             <MetricsCard
               title="Conversion %"
-              value={fmtPct(avgConversion)}
-              color="text-emerald-600"
-              currentValue={avgConversion}
-              previousValue={prevAvgConversion}
-              sparklineData={conversionSpark}
+              info={`Units ordered ÷ ${totals?.hasSessions ? 'browser sessions' : 'sessions'} across the whole period. Page views are not sessions.`}
+              subtitle={
+                conversionAvailable
+                  ? `${fmtNum(totalUnits)} units ÷ ${fmtNum(totals?.sessions || 0)} sessions`
+                  : totals?.hasSessions
+                    ? `Units (${fmtNum(totalUnits)}) exceed sessions (${fmtNum(totals?.sessions || 0)}) — withheld`
+                    : 'Sessions are not reported for this account'
+              }
+              value={conversionAvailable ? fmtPct(avgConversion) : '—'}
+              color={conversionAvailable ? 'text-emerald-600' : 'text-muted-foreground'}
+              currentValue={conversionAvailable ? avgConversion : 0}
+              previousValue={conversionAvailable ? prevAvgConversion : 0}
+              sparklineData={conversionAvailable ? conversionSpark : undefined}
             />
           </div>
         )}

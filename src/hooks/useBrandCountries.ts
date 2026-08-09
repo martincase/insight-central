@@ -120,7 +120,12 @@ export function useBrandCountries(merchantToken?: string | null): UseBrandCountr
           primary,
           isMultiCountry: countries.length >= 2,
           loading: false,
-          error: null,
+          // Loud on purpose: an unresolvable scope used to fall through to the
+          // 'GB' default in every caller, which renders the UK numbers under
+          // whatever country the switcher happens to be showing.
+          error: countries.length === 0
+            ? `No enabled marketplaces are registered for ${merchantToken} in brand_marketplaces — country scope cannot be resolved.`
+            : null,
         });
       } catch (e: any) {
         if (cancelled) return;
