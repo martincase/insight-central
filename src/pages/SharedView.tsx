@@ -1000,6 +1000,7 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
                       directOrganicMetrics={directOrganicMetrics}
                       directOrganicPreviousMetrics={directOrganicPreviousMetrics}
                       dateFilter={dateFilter}
+                      customDateRange={customDateRange}
                       apiPpcDailyData={apiPpcAllDaily}
                     />
                   )}

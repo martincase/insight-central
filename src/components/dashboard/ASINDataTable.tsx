@@ -181,6 +181,11 @@ export const ASINDataTable: React.FC<ASINDataTableProps> = ({
             <div className="text-sm text-muted-foreground text-center">
               <div className="font-medium">{periodName}</div>
               <div><strong>{currentPeriodText}</strong> vs {previousPeriodText}</div>
+              {showComparison && (
+                <div className="text-[11px]">
+                  Change markers: <span className="font-semibold">✓</span> better · <span className="font-semibold">✕</span> worse
+                </div>
+              )}
             </div>
             <Button variant="outline" size="sm" onClick={() => setShowComparison(!showComparison)} className="text-xs">
               {showComparison ? 'Hide' : 'Show'} Comparison
@@ -276,7 +281,7 @@ export const ASINDataTable: React.FC<ASINDataTableProps> = ({
                     <div className="flex items-center justify-end gap-2 min-h-[20px]">
                       <span>{formatCurrencyByMerchantToken(asin.sales ?? 0, accountMerchantToken || '')}</span>
                       <div className="w-[60px] flex justify-center">
-                        {showComparison && <TrendIndicator currentValue={asin.sales} previousValue={asin.previousPeriod?.sales || 0} />}
+                        {showComparison && <TrendIndicator compact currentValue={asin.sales} previousValue={asin.previousPeriod?.sales || 0} />}
                       </div>
                     </div>
                   </TableCell>
@@ -285,7 +290,7 @@ export const ASINDataTable: React.FC<ASINDataTableProps> = ({
                     <div className="flex items-center justify-end gap-2 min-h-[20px]">
                       <span>{(asin.unitsSold ?? 0).toLocaleString()}</span>
                       <div className="w-[60px] flex justify-center">
-                        {showComparison && <TrendIndicator currentValue={asin.unitsSold} previousValue={asin.previousPeriod?.unitsSold || 0} />}
+                        {showComparison && <TrendIndicator compact currentValue={asin.unitsSold} previousValue={asin.previousPeriod?.unitsSold || 0} />}
                       </div>
                     </div>
                   </TableCell>
@@ -296,7 +301,7 @@ export const ASINDataTable: React.FC<ASINDataTableProps> = ({
                         <div className="flex items-center justify-end gap-2 min-h-[20px]">
                           <span>{formatCurrencyByMerchantToken(asin.shippedCogs ?? 0, accountMerchantToken || '')}</span>
                           <div className="w-[60px] flex justify-center">
-                            {showComparison && <TrendIndicator currentValue={asin.shippedCogs ?? 0} previousValue={asin.previousPeriod?.shippedCogs || 0} />}
+                            {showComparison && <TrendIndicator compact currentValue={asin.shippedCogs ?? 0} previousValue={asin.previousPeriod?.shippedCogs || 0} />}
                           </div>
                         </div>
                       </TableCell>
@@ -304,7 +309,7 @@ export const ASINDataTable: React.FC<ASINDataTableProps> = ({
                         <div className="flex items-center justify-end gap-2 min-h-[20px]">
                           <span>{formatCurrencyByMerchantToken(asin.shippedRevenue ?? 0, accountMerchantToken || '')}</span>
                           <div className="w-[60px] flex justify-center">
-                            {showComparison && <TrendIndicator currentValue={asin.shippedRevenue ?? 0} previousValue={asin.previousPeriod?.shippedRevenue || 0} />}
+                            {showComparison && <TrendIndicator compact currentValue={asin.shippedRevenue ?? 0} previousValue={asin.previousPeriod?.shippedRevenue || 0} />}
                           </div>
                         </div>
                       </TableCell>

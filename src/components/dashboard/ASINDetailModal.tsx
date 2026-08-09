@@ -125,6 +125,7 @@ export const ASINDetailModal: React.FC = () => {
                   {data.performance.previousPeriod && (
                     <div className="flex items-center mt-1">
                       <TrendIndicator
+                        comparisonLabel="vs previous 30 days"
                         currentValue={data.performance.sales}
                         previousValue={data.performance.previousPeriod.sales}
                       />
@@ -147,6 +148,7 @@ export const ASINDetailModal: React.FC = () => {
                   {data.performance.previousPeriod && (
                     <div className="flex items-center mt-1">
                       <TrendIndicator
+                        comparisonLabel="vs previous 30 days"
                         currentValue={data.performance.unitsSold}
                         previousValue={data.performance.previousPeriod.unitsSold}
                       />
@@ -169,6 +171,7 @@ export const ASINDetailModal: React.FC = () => {
                   {data.performance.previousPeriod && (
                     <div className="flex items-center mt-1">
                       <TrendIndicator
+                        comparisonLabel="vs previous 30 days"
                         currentValue={data.performance.pageViews}
                         previousValue={data.performance.previousPeriod.pageViews}
                       />
@@ -191,6 +194,7 @@ export const ASINDetailModal: React.FC = () => {
                   {data.performance.previousPeriod && (
                     <div className="flex items-center mt-1">
                       <TrendIndicator
+                        comparisonLabel="vs previous 30 days"
                         currentValue={data.performance.buyBoxPercentage}
                         previousValue={data.performance.previousPeriod.buyBoxPercentage}
                         isPercentage={true}

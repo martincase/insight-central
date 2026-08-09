@@ -12,6 +12,7 @@ import { getCurrencyInfo } from '@/utils/currencyUtils';
 import { getCountryName } from '@/utils/countryUtils';
 import { getAmazonProductUrl } from '@/utils/amazonUtils';
 import { getCurrentDateRange, getPreviousDateRange } from '@/utils/dataProcessor';
+import { buildComparisonLabel } from '@/utils/comparisonLabels';
 import type { DateFilter } from '@/types/dashboard';
 
 interface Props {
@@ -78,6 +79,15 @@ export function CountryScopedPerformance({
   const pEnd = useMemo(() => format(currentRange.to, 'yyyy-MM-dd'), [currentRange.to]);
   const ppStart = useMemo(() => format(previousRange.from, 'yyyy-MM-dd'), [previousRange.from]);
   const ppEnd = useMemo(() => format(previousRange.to, 'yyyy-MM-dd'), [previousRange.to]);
+
+  // Name the baseline on the card face. Built from the exact ranges this
+  // component queries, so the label can never drift from the figures.
+  const comparison = useMemo(
+    () => buildComparisonLabel(currentRange, previousRange, {
+      rolling: dateFilter === 'last-7-days' || dateFilter === 'last-14-days' || dateFilter === 'past-30-days',
+    }),
+    [currentRange, previousRange, dateFilter]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -270,14 +280,16 @@ export function CountryScopedPerformance({
               color="text-blue-600"
               currentValue={totalSales}
               previousValue={prevSales}
+              comparisonLabel={comparison}
               sparklineData={salesSpark}
             />
             <MetricsCard
               title="Units Ordered"
               value={fmtNum(totalUnits)}
-              color="text-emerald-600"
+              color="text-indigo-600"
               currentValue={totalUnits}
               previousValue={prevUnits}
+              comparisonLabel={comparison}
               sparklineData={unitsSpark}
             />
             <MetricsCard
@@ -286,22 +298,25 @@ export function CountryScopedPerformance({
               color="text-blue-600"
               currentValue={totalPageViews}
               previousValue={prevPageViews}
+              comparisonLabel={comparison}
               sparklineData={pageViewsSpark}
             />
             <MetricsCard
               title="Buy Box %"
               value={fmtPct(avgBuyBox)}
-              color="text-emerald-600"
+              color="text-violet-600"
               currentValue={avgBuyBox}
               previousValue={prevAvgBuyBox}
+              comparisonLabel={comparison}
               sparklineData={buyBoxSpark}
             />
             <MetricsCard
               title="Conversion %"
               value={fmtPct(avgConversion)}
-              color="text-emerald-600"
+              color="text-fuchsia-600"
               currentValue={avgConversion}
               previousValue={prevAvgConversion}
+              comparisonLabel={comparison}
               sparklineData={conversionSpark}
             />
           </div>

@@ -3,6 +3,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { TrendIndicator } from './TrendIndicator';
 import { InfoTooltip } from '@/components/common/InfoTooltip';
 import { LineChart, Line, ResponsiveContainer } from 'recharts';
+import type { ComparisonLabel } from '@/utils/comparisonLabels';
 
 interface MetricsCardProps {
   title: string;
@@ -14,7 +15,8 @@ interface MetricsCardProps {
   onClick?: () => void;
   isSelected?: boolean;
   sparklineData?: number[];
-  comparisonLabel?: string;
+  /** What the delta is measured against — printed on the card face, not hidden in a tooltip. */
+  comparisonLabel?: string | ComparisonLabel;
   invertSentiment?: boolean;
   /** Optional explainer shown via standardised ⓘ hover tooltip. */
   info?: React.ReactNode;
@@ -37,9 +39,11 @@ export const MetricsCard = ({
   subtitle,
 }: MetricsCardProps) => {
   const chartData = sparklineData?.map((v, i) => ({ v, i }));
-  const isUpward = sparklineData && sparklineData.length >= 2
-    ? sparklineData[sparklineData.length - 1] >= sparklineData[0]
-    : true;
+  // Colour the sparkline from the SAME comparison the delta badge uses. It used
+  // to compare the first and last points of the spark, which is a different
+  // question — so a card could show a green line above a red delta.
+  const hasBaseline = previousValue !== 0 && !isNaN(previousValue) && !isNaN(currentValue);
+  const isUpward = hasBaseline ? currentValue >= previousValue : true;
   // Good direction depends on whether sentiment is inverted (cost metrics)
   const isGoodDirection = invertSentiment ? !isUpward : isUpward;
 
@@ -62,13 +66,6 @@ export const MetricsCard = ({
               <span className="truncate">{title}</span>
               {info && <InfoTooltip content={info} />}
             </h3>
-            <TrendIndicator
-              currentValue={currentValue}
-              previousValue={previousValue}
-              isPercentage={isPercentage}
-              comparisonLabel={comparisonLabel}
-              invertSentiment={invertSentiment}
-            />
           </div>
 
           {/* Value + Sparkline */}
@@ -83,7 +80,7 @@ export const MetricsCard = ({
                     <Line
                       type="monotone"
                       dataKey="v"
-                      stroke={isGoodDirection ? '#22c55e' : '#ef4444'}
+                      stroke={!hasBaseline ? '#94a3b8' : isGoodDirection ? '#22c55e' : '#ef4444'}
                       strokeWidth={1.5}
                       dot={false}
                       activeDot={false}
@@ -93,6 +90,18 @@ export const MetricsCard = ({
                 </ResponsiveContainer>
               </div>
             )}
+          </div>
+
+          {/* Change vs baseline — sits directly under the headline number so the
+              big figure is never carried by colour alone. */}
+          <div className="-mt-0.5">
+            <TrendIndicator
+              currentValue={currentValue}
+              previousValue={previousValue}
+              isPercentage={isPercentage}
+              comparisonLabel={comparisonLabel}
+              invertSentiment={invertSentiment}
+            />
           </div>
 
           {subtitle && (

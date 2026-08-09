@@ -7,6 +7,8 @@ import { AdTypeToggle } from '@/components/dashboard/AdTypeToggle';
 import type { AccountData, DateFilter } from '@/types/dashboard';
 import type { ApiPpcMetrics, AdType, ApiPpcDailyRow } from '@/hooks/useApiPpcData';
 import { isVendorAccount as isVendorAccountCheck } from '@/utils/vendorUtils';
+import { getComparisonLabel } from '@/utils/comparisonLabels';
+import { VENDOR_LAG_DAYS } from '@/utils/asinProcessor';
 
 export interface OrganicMetrics {
   sales: number;
@@ -39,6 +41,7 @@ interface MetricsGridProps {
   directOrganicPreviousMetrics?: OrganicMetrics | null;
   apiPpcDailyData?: ApiPpcDailyRow[];
   dateFilter?: DateFilter;
+  customDateRange?: { from: Date; to: Date };
 }
 
 export const MetricsGrid = ({ 
@@ -55,21 +58,18 @@ export const MetricsGrid = ({
   directOrganicPreviousMetrics,
   apiPpcDailyData,
   dateFilter,
+  customDateRange,
 }: MetricsGridProps) => {
-  // Compute comparison label based on date filter
-  const comparisonLabel = useMemo(() => {
-    const labels: Record<string, string> = {
-      'last-7-days': 'vs prior 7 days',
-      'last-14-days': 'vs prior 14 days',
-      'last-30-days': 'vs prior 30 days',
-      'last-60-days': 'vs prior 60 days',
-      'this-month': 'vs prior month',
-      'last-month': 'vs month before',
-      'this-year': 'vs prior year',
-      'custom': 'vs prior period',
-    };
-    return dateFilter ? (labels[dateFilter] || 'vs prior period') : 'vs prior period';
-  }, [dateFilter]);
+  const isVendor = isVendorAccountCheck(focusedAccount?.merchantToken);
+
+  // Name the baseline every delta is measured against. Derived from the actual
+  // date ranges rather than a hand-maintained lookup — the old map was keyed on
+  // filter names that no longer exist ('last-30-days', 'last-60-days'), so most
+  // periods silently fell back to the meaningless "vs prior period".
+  const comparisonLabel = useMemo(
+    () => getComparisonLabel(dateFilter, customDateRange, { vendorLagDays: isVendor ? VENDOR_LAG_DAYS : 0 }),
+    [dateFilter, customDateRange, isVendor]
+  );
 
   // Only use API PPC data if it was actually provided AND has meaningful data (not just empty defaults)
   const hasApiPpc = !!apiPpcMetrics && !apiPpcLoading && (apiPpcMetrics.spend > 0 || apiPpcMetrics.sales > 0 || apiPpcMetrics.impressions > 0);
@@ -168,7 +168,6 @@ export const MetricsGrid = ({
 
 
   const showExtendedMetrics = focusedAccount !== null;
-  const isVendor = isVendorAccountCheck(focusedAccount?.merchantToken);
 
   // Build sparkline data from daily PPC/vendor rows (last 7 data points)
   const sparklines = useMemo(() => {
@@ -280,7 +279,7 @@ export const MetricsGrid = ({
                 <MetricsCard
                   title="PPC Sales"
                   value={formatCurrencyForMetrics(ppcSales)}
-                  color="text-green-600"
+                  color="text-indigo-600"
                   currentValue={ppcSales}
                   previousValue={prevPpcSales}
                   comparisonLabel={comparisonLabel}
@@ -361,7 +360,7 @@ export const MetricsGrid = ({
               title="PPC Sales"
               info="Sales attributed to advertising (typically 7-day attribution). Higher is better."
               value={formatCurrencyForMetrics(ppcSales)}
-              color="text-green-600"
+              color="text-indigo-600"
               currentValue={ppcSales}
               previousValue={prevPpcSales}
               comparisonLabel={comparisonLabel}
@@ -466,7 +465,7 @@ export const MetricsGrid = ({
             <MetricsCard
               title="PPC Clicks"
               value={ppcClicks.toLocaleString()}
-              color="text-green-600"
+              color="text-violet-600"
               currentValue={ppcClicks}
               previousValue={prevPpcClicks}
               comparisonLabel={comparisonLabel}
@@ -550,7 +549,7 @@ export const MetricsGrid = ({
               <MetricsCard
                 title="Conversion Rate"
                 value={formatPercentage(avgConversionRate)}
-                color="text-red-600"
+                color="text-fuchsia-600"
                 currentValue={avgConversionRate}
                 previousValue={avgPreviousConversionRate}
               comparisonLabel={comparisonLabel}
@@ -605,7 +604,7 @@ export const MetricsGrid = ({
         <MetricsCard
           title="Total PPC Sales"
           value={formatCurrencyForMetrics(totalMetrics.ppcSales)}
-          color="text-green-600"
+          color="text-indigo-600"
           currentValue={totalMetrics.ppcSales}
           previousValue={totalPreviousMetrics.ppcSales}
               comparisonLabel={comparisonLabel}
