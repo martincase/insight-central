@@ -72,7 +72,7 @@ export async function fetchASINDataFromSupabase(merchantToken?: string, daysBack
 }
 
 /**
- * Fetch vendor data from Supabase daily_vendor_data table.
+ * Fetch vendor data from Supabase vw_daily_vendor_data table.
  * Fetches last 90 days by default.
  */
 export async function fetchVendorDataFromSupabase(
@@ -87,7 +87,7 @@ export async function fetchVendorDataFromSupabase(
 
   while (true) {
     let query = supabase
-      .from("daily_vendor_data")
+      .from("vw_daily_vendor_data")
       .select(
         "record_date, merchant_token, account_name, asin, sales, units_ordered, page_views, buy_box_percentage, conversion_rate, shipped_cogs_amount, shipped_revenue_amount",
       )

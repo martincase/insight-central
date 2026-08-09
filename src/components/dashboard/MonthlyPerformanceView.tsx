@@ -323,7 +323,7 @@ const fetchHistoricalData = async (
       dateFilter,
       useDaily,
       vendorLagDays: isVendor ? VENDOR_LAG_DAYS : 0,
-      queryTable: isVendor ? 'daily_vendor_data' : 'perplexity_sales_data + perplexity_ppc_campaigns',
+      queryTable: isVendor ? 'vw_daily_vendor_data' : 'perplexity_sales_data + perplexity_ppc_campaigns',
       filters: {
         merchant_token: isVendor ? merchantToken : undefined,
         record_date_gte: queryStartDateString,
@@ -331,11 +331,11 @@ const fetchHistoricalData = async (
       },
     });
 
-    // --- VENDOR PATH: query daily_vendor_data ---
+    // --- VENDOR PATH: query vw_daily_vendor_data ---
     if (isVendor) {
-      console.log('🏪 MonthlyPerformanceView: fetching vendor data from daily_vendor_data', {
+      console.log('🏪 MonthlyPerformanceView: fetching vendor data from vw_daily_vendor_data', {
         merchantToken,
-        table: 'daily_vendor_data',
+        table: 'vw_daily_vendor_data',
         filters: {
           merchant_token: merchantToken,
           record_date_gte: queryStartDateString,
@@ -350,7 +350,7 @@ const fetchHistoricalData = async (
 
       while (true) {
         const { data, error } = await supabase
-          .from('daily_vendor_data')
+          .from('vw_daily_vendor_data')
           .select('record_date, merchant_token, sales, units_ordered, page_views, buy_box_percentage')
           .eq('merchant_token', merchantToken)
           .gte('record_date', queryStartDateString)
@@ -376,7 +376,7 @@ const fetchHistoricalData = async (
       if (allVendorData.length === 0) {
         console.log('🏪 MonthlyPerformanceView: no vendor data found', {
           merchantToken,
-          table: 'daily_vendor_data',
+          table: 'vw_daily_vendor_data',
           record_date_gte: queryStartDateString,
           record_date_lte: queryEndDateString,
         });

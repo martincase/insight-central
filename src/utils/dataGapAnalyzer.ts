@@ -96,7 +96,7 @@ export class DataGapAnalyzer {
     if (accountType === 'vendor') {
       // Vendors only need vendor data checked
       dataTypeConfigs = [
-        { type: 'vendor', table: 'daily_vendor_data', dateColumn: 'record_date' },
+        { type: 'vendor', table: 'vw_daily_vendor_data', dateColumn: 'record_date' },
         { type: 'inventory', table: 'daily_inventory_data', dateColumn: 'record_date' },
       ];
     } else {
@@ -165,9 +165,9 @@ export class DataGapAnalyzer {
             .lte(dateColumn, format(endDate, 'yyyy-MM-dd'))
             .order(dateColumn, { ascending: true }));
           break;
-        case 'daily_vendor_data':
+        case 'vw_daily_vendor_data':
           ({ data, error } = await supabase
-            .from('daily_vendor_data')
+            .from('vw_daily_vendor_data')
             .select(dateColumn)
             .eq('merchant_token', merchantToken)
             .gte(dateColumn, format(startDate, 'yyyy-MM-dd'))

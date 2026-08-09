@@ -54,14 +54,38 @@ export function useBrandCountries(merchantToken?: string | null): UseBrandCountr
 
     (async () => {
       try {
+        const COLS =
+          'country_code, marketplace_id, currency, region, is_primary, sales_account_key, enabled, brand_name, selling_partner_id';
+
         const { data: bmRows, error: bmErr } = await supabase
           .from('brand_marketplaces')
-          .select('country_code, marketplace_id, currency, region, is_primary, sales_account_key, enabled')
+          .select(COLS)
           .eq('selling_partner_id', spid)
           .eq('enabled', true);
         if (bmErr) throw bmErr;
 
-        const rows = (bmRows || []) as any[];
+        let rows = (bmRows || []) as any[];
+
+        // Vendors get a DIFFERENT selling_partner_id in every marketplace (Portwest GB is
+        // amzn1.vg.2072811, DE is amzn1.vg.5674352, and so on), so the spid lookup above
+        // finds one country and misses the rest. Sellers keep one id across all countries,
+        // where it works fine. Widen to the brand once we know which brand this is.
+        const brand = rows.find((r) => r.brand_name)?.brand_name;
+        if (brand) {
+          const { data: brandRows, error: brandErr } = await supabase
+            .from('brand_marketplaces')
+            .select(COLS)
+            .eq('brand_name', brand)
+            .eq('enabled', true);
+          if (brandErr) throw brandErr;
+
+          // Union on sales_account_key — that is the unique account×marketplace key.
+          const byKey = new Map<string, any>();
+          [...rows, ...((brandRows || []) as any[])].forEach((r) => {
+            if (r.sales_account_key) byKey.set(r.sales_account_key, r);
+          });
+          rows = Array.from(byKey.values());
+        }
         const mktIds = Array.from(new Set(rows.map((r) => r.marketplace_id).filter(Boolean)));
         let namesById = new Map<string, { country_name: string; sort_order: number }>();
         if (mktIds.length) {

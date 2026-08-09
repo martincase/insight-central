@@ -9,7 +9,6 @@ import { getCountryInfo, getCountryFlagImage, getCountryName } from '@/utils/cou
 import { processInventoryData, fetchInventoryData } from '@/utils/inventoryProcessor';
 import { processASINData, detectMissingDates, getASINFallbackInfo, getVendorCurrentDateRange } from '@/utils/asinProcessor';
 import { updateAccountsWithFilteredData } from '@/utils/dataProcessor';
-import { fetchAccountsFromSheet } from '@/utils/accountsProcessor';
 import { fetchVendorData } from '@/utils/vendorProcessor';
 import { fetchASINDataFromSupabase, fetchVendorDataFromSupabase, fetchInventoryFromSupabase } from '@/utils/supabaseDataFetchers';
 import { GOOGLE_SHEETS_CONFIG } from '@/constants/dashboard';
@@ -402,17 +401,17 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
       let usedSupabaseFastPath = false;
 
       try {
-        const { data: masterRow, error: masterError } = await supabase
-          .from('accounts_master')
-          .select('*')
-          .eq('share_code', shareId)
-          .limit(1)
-          .maybeSingle();
+        // Resolve server-side: the RPC returns at most one account and only when BOTH the
+        // share code and the normalised brand name match. Previously this read
+        // accounts_master directly, which handed every share-link visitor the entire
+        // roster — every client's name, merchant token and share code.
+        const { data: resolved, error: masterError } = await supabase
+          .rpc('rpc_resolve_share', { p_brand: brandName, p_code: shareId });
+
+        const masterRow: any = Array.isArray(resolved) ? resolved[0] : resolved;
 
         if (!masterError && masterRow) {
-          // Validate brand name matches for security
-          const nameMatch = normalizedBrandName(masterRow.account_name) === normalizedBrandName(brandName);
-          if (nameMatch) {
+          {
             matchedAccount = {
               id: `${masterRow.merchant_token}-${masterRow.account_name.replace(/\s+/g, '-')}`,
               name: masterRow.account_name,
@@ -438,18 +437,11 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
       } catch (supabaseErr) {
       }
 
-      // ── Fallback: If Supabase didn't find it, use Google Sheets ──
+      // No roster fallback. The RPC above is authoritative — if it returns nothing, the
+      // brand/code pair is genuinely invalid and must fail closed. Falling back to
+      // downloading every account (the old behaviour) is exactly the leak being closed.
       if (!matchedAccount) {
-        const accounts = await fetchWithTimeout(
-          fetchAccountsFromSheet(),
-          15000
-        ) as AccountData[];
-
-        matchedAccount = accounts.find((a: AccountData) => {
-          const nameMatch = normalizedBrandName(a.name) === normalizedBrandName(brandName);
-          const codeMatch = a.shareCode === shareId;
-          return nameMatch && codeMatch;
-        }) || null;
+        matchedAccount = null;
 
         if (matchedAccount) {
           setAccount(matchedAccount);
@@ -458,19 +450,9 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
         }
       }
 
-      // ── PHASE 2: Background refresh from Sheets (if we used fast path) ──
-      if (usedSupabaseFastPath && matchedAccount) {
-        const bgAccount = matchedAccount; // capture for closure
-        fetchAccountsFromSheet().then(accounts => {
-          const freshMatch = accounts.find((a: AccountData) => {
-            return normalizedBrandName(a.name) === normalizedBrandName(brandName) && a.shareCode === shareId;
-          });
-          if (freshMatch) {
-            setAccount(prev => prev ? { ...prev, ...freshMatch } : freshMatch);
-          }
-        }).catch(err => {
-        });
-      }
+      // PHASE 2 (background roster refresh) removed deliberately. It re-fetched every
+      // account in order to update the one already resolved above — no benefit, and it
+      // leaked the full roster to every share-link visitor.
 
       if (matchedAccount) {
         

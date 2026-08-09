@@ -209,7 +209,7 @@ async function fetchVendorData(merchantToken: string, startDate: string, endDate
   const batchSize = 1000;
   while (true) {
     const { data, error } = await supabase
-      .from('daily_vendor_data')
+      .from('vw_daily_vendor_data')
       .select('record_date, sales, units_ordered, page_views, buy_box_percentage')
       .eq('merchant_token', merchantToken)
       .gte('record_date', startDate)
@@ -343,7 +343,7 @@ export function useApiPpcData({
         const { prevStart, prevEnd } = getPreviousPeriodDates();
 
         if (isVendor && merchantToken) {
-          // VENDOR PATH: query daily_vendor_data
+          // VENDOR PATH: query vw_daily_vendor_data
           const [current, prev] = await Promise.all([
             fetchVendorData(merchantToken, startDate, endDate),
             prevStart && prevEnd ? fetchVendorData(merchantToken, prevStart, prevEnd) : Promise.resolve([]),

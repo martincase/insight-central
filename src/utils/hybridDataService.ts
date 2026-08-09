@@ -390,7 +390,7 @@ export class HybridDataService {
 
   private async fetchBankedVendorData(dateRange: { from: Date; to: Date }): Promise<any[]> {
     const { data, error } = await supabase
-      .from('daily_vendor_data')
+      .from('vw_daily_vendor_data')
       .select('*')
       .gte('record_date', format(dateRange.from, 'yyyy-MM-dd'))
       .lte('record_date', format(dateRange.to, 'yyyy-MM-dd'))
