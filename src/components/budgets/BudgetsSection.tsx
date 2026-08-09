@@ -26,6 +26,7 @@ import { getCurrencyInfo } from '@/utils/currencyUtils';
 import { useChartReady } from '@/hooks/useChartReady';
 import type { AddonSectionProps } from '@/addons/registry';
 import { BudgetUploadDialog } from './BudgetUploadDialog';
+import { isRollupScope } from '@/utils/scope';
 
 interface SummaryRow {
   metric: 'sales' | 'ppc_spend' | string;
@@ -112,8 +113,8 @@ export function BudgetsSection(props: AddonSectionProps) {
   const metricsToShow: string[] = Array.isArray(config?.metrics) ? config!.metrics : ['sales', 'ppc_spend'];
   const asof = useMemo(() => format(new Date(), 'yyyy-MM-dd'), []);
 
-  const cur = getCurrencyInfo(scope === 'ALL' || scope === 'ALL_EU' ? 'GB' : scope);
-  const isRollup = scope === 'ALL' || scope === 'ALL_EU';
+  const isRollup = isRollupScope(scope);
+  const cur = getCurrencyInfo(isRollup ? 'GB' : scope);
   const effectiveGbp = showGbp || isRollup;
   const displayCur = effectiveGbp ? getCurrencyInfo('GB') : cur;
 

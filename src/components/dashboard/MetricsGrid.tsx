@@ -95,8 +95,34 @@ export const MetricsGrid = ({
     return formatCurrency(amount);
   };
 
+  // A rate with no denominator is unknown, not zero. '—' says so; "0.0%" or
+  // "£0.00" would be read as a real, very good number.
+  const rateMoney = (v: number | null) => (v == null ? '—' : formatCurrencyForMetrics(v));
+  const ratePct = (v: number | null) => (v == null ? '—' : formatPercentage(v));
+  /** Deltas need a number; a withheld rate compares against nothing. */
+  const rateDelta = (v: number | null) => v ?? 0;
+
+  // ---------------------------------------------------------------------
+  // Rates are never summed and never averaged.
+  //
+  // Only extensive quantities — money, units, clicks, impressions — add up
+  // across accounts. A rate is a ratio of two of them, so a set-wide rate has
+  // to be rebuilt from the set-wide numerator and denominator. Summing CPC gave
+  // a two-account total of "£1.40" for two accounts charging £0.70 each;
+  // averaging ACOS weighted a £50 account equally with a £50,000 one.
+  //
+  // Same house rule already applied to conversion: Σunits ÷ Σsessions, never a
+  // mean of per-row rates. A missing or zero denominator returns null and the
+  // card prints '—' rather than a confident zero.
+  // ---------------------------------------------------------------------
+  const ratio = (numerator: number, denominator: number, scale = 1): number | null => {
+    if (!Number.isFinite(numerator) || !Number.isFinite(denominator)) return null;
+    if (denominator <= 0) return null;
+    return (numerator / denominator) * scale;
+  };
+
   // Calculate organic metrics: prefer direct computation from sheetData, fall back to account aggregation
-  const accountAggregated = gbpAccounts.reduce((acc, account) => ({
+  const accountSums = gbpAccounts.reduce((acc, account) => ({
     sales: acc.sales + (Number(account.sales) || 0),
     ppcSpend: acc.ppcSpend + (Number(account.ppcSpend) || 0),
     ppcSales: acc.ppcSales + (Number(account.ppcSales) || 0),
@@ -104,16 +130,20 @@ export const MetricsGrid = ({
     pageViews: acc.pageViews + (Number(account.pageViews) || 0),
     impressions: acc.impressions + (Number(account.impressions) || 0),
     clicks: acc.clicks + (Number(account.clicks) || 0),
-    cpc: acc.cpc + (Number(account.cpc) || 0),
-    ctr: acc.ctr + (Number(account.ctr) || 0),
-  }), { sales: 0, ppcSpend: 0, ppcSales: 0, unitsOrdered: 0, pageViews: 0, impressions: 0, clicks: 0, cpc: 0, ctr: 0 });
+  }), { sales: 0, ppcSpend: 0, ppcSales: 0, unitsOrdered: 0, pageViews: 0, impressions: 0, clicks: 0 });
+
+  const accountAggregated = {
+    ...accountSums,
+    cpc: ratio(accountSums.ppcSpend, accountSums.clicks) ?? 0,
+    ctr: ratio(accountSums.clicks, accountSums.impressions, 100) ?? 0,
+  };
 
   // Use direct organic metrics if provided (always preferred - computed fresh from raw sheetData)
   const baseTotalMetrics = directOrganicMetrics
     ? { sales: directOrganicMetrics.sales, unitsOrdered: directOrganicMetrics.unitsOrdered, pageViews: directOrganicMetrics.pageViews, ppcSpend: directOrganicMetrics.ppcSpend, ppcSales: directOrganicMetrics.ppcSales, impressions: directOrganicMetrics.impressions, clicks: directOrganicMetrics.clicks, cpc: directOrganicMetrics.cpc, ctr: directOrganicMetrics.ctr }
     : accountAggregated;
 
-  const prevAccountAggregated = gbpAccounts.reduce((acc, account) => ({
+  const prevAccountSums = gbpAccounts.reduce((acc, account) => ({
     sales: acc.sales + (account.previousPeriod?.sales || 0),
     ppcSpend: acc.ppcSpend + (account.previousPeriod?.ppcSpend || 0),
     ppcSales: acc.ppcSales + (account.previousPeriod?.ppcSales || 0),
@@ -121,9 +151,13 @@ export const MetricsGrid = ({
     pageViews: acc.pageViews + (account.previousPeriod?.pageViews || 0),
     impressions: acc.impressions + (account.previousPeriod?.impressions || 0),
     clicks: acc.clicks + (account.previousPeriod?.clicks || 0),
-    cpc: acc.cpc + (account.previousPeriod?.cpc || 0),
-    ctr: acc.ctr + (account.previousPeriod?.ctr || 0),
-  }), { sales: 0, ppcSpend: 0, ppcSales: 0, unitsOrdered: 0, pageViews: 0, impressions: 0, clicks: 0, cpc: 0, ctr: 0 });
+  }), { sales: 0, ppcSpend: 0, ppcSales: 0, unitsOrdered: 0, pageViews: 0, impressions: 0, clicks: 0 });
+
+  const prevAccountAggregated = {
+    ...prevAccountSums,
+    cpc: ratio(prevAccountSums.ppcSpend, prevAccountSums.clicks) ?? 0,
+    ctr: ratio(prevAccountSums.clicks, prevAccountSums.impressions, 100) ?? 0,
+  };
 
   const basePreviousMetrics = directOrganicPreviousMetrics
     ? { sales: directOrganicPreviousMetrics.sales, unitsOrdered: directOrganicPreviousMetrics.unitsOrdered, pageViews: directOrganicPreviousMetrics.pageViews, ppcSpend: directOrganicPreviousMetrics.ppcSpend, ppcSales: directOrganicPreviousMetrics.ppcSales, impressions: directOrganicPreviousMetrics.impressions, clicks: directOrganicPreviousMetrics.clicks, cpc: directOrganicPreviousMetrics.cpc, ctr: directOrganicPreviousMetrics.ctr }
@@ -152,24 +186,28 @@ export const MetricsGrid = ({
   const ppcImpressions = hasApiPpc ? apiPpcMetrics.impressions : totalMetrics.impressions;
   const ppcClicks = hasApiPpc ? apiPpcMetrics.clicks : totalMetrics.clicks;
   const ppcOrders = hasApiPpc ? apiPpcMetrics.orders : totalMetrics.unitsOrdered;
-  const ppcCpc = hasApiPpc ? apiPpcMetrics.cpc : (displayedAccounts.length > 0 ? displayedAccounts.reduce((acc, a) => acc + (a.cpc || 0), 0) / displayedAccounts.length : 0);
-  const ppcCtr = hasApiPpc ? apiPpcMetrics.ctr : (displayedAccounts.length > 0 ? displayedAccounts.reduce((acc, a) => acc + (a.ctr || 0), 0) / displayedAccounts.length : 0);
-  const ppcAcos = hasApiPpc ? apiPpcMetrics.acos : (displayedAccounts.length > 0 ? displayedAccounts.reduce((acc, a) => acc + a.acos, 0) / displayedAccounts.length : 0);
-  const ppcCpa = hasApiPpc ? apiPpcMetrics.cpa : (ppcOrders > 0 ? ppcSpend / ppcOrders : 0);
+  // Derived from the four sums immediately above, whichever source they came
+  // from — so the rate and the numbers it is made of can never disagree, and a
+  // multi-account set gets one true rate rather than a mean of per-account ones.
+  const ppcCpc = ratio(ppcSpend, ppcClicks);
+  const ppcCtr = ratio(ppcClicks, ppcImpressions, 100);
+  const ppcAcos = ratio(ppcSpend, ppcSales, 100);
+  const ppcCpa = ratio(ppcSpend, ppcOrders);
 
   const prevPpcSpend = hasApiPpc && apiPpcPreviousMetrics ? apiPpcPreviousMetrics.spend : totalPreviousMetrics.ppcSpend;
   const prevPpcSales = hasApiPpc && apiPpcPreviousMetrics ? apiPpcPreviousMetrics.sales : totalPreviousMetrics.ppcSales;
   const prevPpcImpressions = hasApiPpc && apiPpcPreviousMetrics ? apiPpcPreviousMetrics.impressions : totalPreviousMetrics.impressions;
   const prevPpcClicks = hasApiPpc && apiPpcPreviousMetrics ? apiPpcPreviousMetrics.clicks : totalPreviousMetrics.clicks;
   const prevPpcOrders = hasApiPpc && apiPpcPreviousMetrics ? apiPpcPreviousMetrics.orders : totalPreviousMetrics.unitsOrdered;
-  const prevPpcCpc = hasApiPpc && apiPpcPreviousMetrics ? apiPpcPreviousMetrics.cpc : (displayedAccounts.length > 0 ? displayedAccounts.reduce((acc, a) => acc + (a.previousPeriod?.cpc || 0), 0) / displayedAccounts.length : 0);
-  const prevPpcCtr = hasApiPpc && apiPpcPreviousMetrics ? apiPpcPreviousMetrics.ctr : (displayedAccounts.length > 0 ? displayedAccounts.reduce((acc, a) => acc + (a.previousPeriod?.ctr || 0), 0) / displayedAccounts.length : 0);
-  const prevPpcAcos = hasApiPpc && apiPpcPreviousMetrics ? apiPpcPreviousMetrics.acos : (displayedAccounts.length > 0 ? displayedAccounts.reduce((acc, a) => acc + (a.previousPeriod?.acos || 0), 0) / displayedAccounts.length : 0);
-  const prevPpcCpa = hasApiPpc && apiPpcPreviousMetrics ? apiPpcPreviousMetrics.cpa : (prevPpcOrders > 0 ? prevPpcSpend / prevPpcOrders : 0);
+  const prevPpcCpc = ratio(prevPpcSpend, prevPpcClicks);
+  const prevPpcCtr = ratio(prevPpcClicks, prevPpcImpressions, 100);
+  const prevPpcAcos = ratio(prevPpcSpend, prevPpcSales, 100);
+  const prevPpcCpa = ratio(prevPpcSpend, prevPpcOrders);
 
-  // TACOS = API PPC spend / daily_asin_data total sales (hybrid)
-  const tacos = totalMetrics.sales > 0 ? (ppcSpend / totalMetrics.sales) * 100 : 0;
-  const prevTacos = totalPreviousMetrics.sales > 0 ? (prevPpcSpend / totalPreviousMetrics.sales) * 100 : 0;
+  // TACOS = ad spend ÷ TOTAL sales. Withheld when there are no sales to divide
+  // by; "0.0%" would read as "advertising is free", not "unknown".
+  const tacos = ratio(ppcSpend, totalMetrics.sales, 100);
+  const prevTacos = ratio(prevPpcSpend, totalPreviousMetrics.sales, 100);
 
   // Advertising reliance
   const advertisingReliance = totalMetrics.sales > 0 ? (ppcSales / totalMetrics.sales) * 100 : 0;
@@ -365,10 +403,10 @@ export const MetricsGrid = ({
                 <MetricsCard
                   title="ACOS"
                   invertSentiment
-                  value={formatPercentage(ppcAcos)}
+                  value={ratePct(ppcAcos)}
                   color="text-purple-600"
-                  currentValue={ppcAcos}
-                  previousValue={prevPpcAcos}
+                  currentValue={rateDelta(ppcAcos)}
+                  previousValue={rateDelta(prevPpcAcos)}
                   comparisonLabel={comparisonLabel}
                   isPercentage={true}
                   onClick={onToggleChartMetric ? () => onToggleChartMetric('acos') : undefined}
@@ -378,10 +416,10 @@ export const MetricsGrid = ({
                 <MetricsCard
                   title="CPC"
                   invertSentiment
-                  value={formatCurrencyForMetrics(ppcCpc)}
+                  value={rateMoney(ppcCpc)}
                   color="text-amber-600"
-                  currentValue={ppcCpc}
-                  previousValue={prevPpcCpc}
+                  currentValue={rateDelta(ppcCpc)}
+                  previousValue={rateDelta(prevPpcCpc)}
                   comparisonLabel={comparisonLabel}
                 />
               </div>
@@ -485,10 +523,10 @@ export const MetricsGrid = ({
               title="ACOS"
               info="Ad spend ÷ PPC sales. Cost metric — lower is better. A rising delta turns red."
               invertSentiment
-              value={formatPercentage(ppcAcos)}
+              value={ratePct(ppcAcos)}
               color="text-purple-600"
-              currentValue={ppcAcos}
-              previousValue={prevPpcAcos}
+              currentValue={rateDelta(ppcAcos)}
+              previousValue={rateDelta(prevPpcAcos)}
               comparisonLabel={comparisonLabel}
               isPercentage={true}
               onClick={onToggleChartMetric ? () => onToggleChartMetric('acos') : undefined}
@@ -500,10 +538,10 @@ export const MetricsGrid = ({
               title="TACOS"
               info="Ad spend ÷ TOTAL sales (organic + PPC). Cost metric — lower is better."
               invertSentiment
-              value={formatPercentage(tacos)}
+              value={ratePct(tacos)}
               color="text-cyan-600"
-              currentValue={tacos}
-              previousValue={prevTacos}
+              currentValue={rateDelta(tacos)}
+              previousValue={rateDelta(prevTacos)}
               comparisonLabel={comparisonLabel}
               isPercentage={true}
               onClick={onToggleChartMetric ? () => onToggleChartMetric('tacos') : undefined}
@@ -555,10 +593,10 @@ export const MetricsGrid = ({
             <MetricsCard
               title="CPC"
               invertSentiment
-              value={formatCurrencyForMetrics(ppcCpc)}
+              value={rateMoney(ppcCpc)}
               color="text-orange-600"
-              currentValue={ppcCpc}
-              previousValue={prevPpcCpc}
+              currentValue={rateDelta(ppcCpc)}
+              previousValue={rateDelta(prevPpcCpc)}
               comparisonLabel={comparisonLabel}
               onClick={onToggleChartMetric ? () => onToggleChartMetric('cpc') : undefined}
               isSelected={selectedChartMetrics?.includes('cpc')}
@@ -567,10 +605,10 @@ export const MetricsGrid = ({
 
             <MetricsCard
               title="CTR"
-              value={formatPercentage(ppcCtr)}
+              value={ratePct(ppcCtr)}
               color="text-blue-600"
-              currentValue={ppcCtr}
-              previousValue={prevPpcCtr}
+              currentValue={rateDelta(ppcCtr)}
+              previousValue={rateDelta(prevPpcCtr)}
               comparisonLabel={comparisonLabel}
               isPercentage={true}
               onClick={onToggleChartMetric ? () => onToggleChartMetric('ctr') : undefined}
@@ -581,10 +619,10 @@ export const MetricsGrid = ({
             <MetricsCard
               title="CPA"
               invertSentiment
-              value={formatCurrencyForMetrics(ppcCpa)}
+              value={rateMoney(ppcCpa)}
               color="text-orange-600"
-              currentValue={ppcCpa}
-              previousValue={prevPpcCpa}
+              currentValue={rateDelta(ppcCpa)}
+              previousValue={rateDelta(prevPpcCpa)}
               comparisonLabel={comparisonLabel}
               onClick={onToggleChartMetric ? () => onToggleChartMetric('cpa') : undefined}
               isSelected={selectedChartMetrics?.includes('cpa')}
@@ -655,19 +693,16 @@ export const MetricsGrid = ({
     );
   }
 
-  // Default view - condensed metrics (no API PPC here, unfocused view)
-  const avgAcos = displayedAccounts.length > 0 
-    ? displayedAccounts.reduce((acc, account) => acc + account.acos, 0) / displayedAccounts.length 
-    : 0;
-  const avgTacos = displayedAccounts.length > 0 
-    ? displayedAccounts.reduce((acc, account) => acc + account.tacos, 0) / displayedAccounts.length 
-    : 0;
-  const avgPreviousAcos = displayedAccounts.length > 0 
-    ? displayedAccounts.reduce((acc, account) => acc + (account.previousPeriod?.acos || 0), 0) / displayedAccounts.length 
-    : 0;
-  const avgPreviousTacos = displayedAccounts.length > 0 
-    ? displayedAccounts.reduce((acc, account) => acc + (account.previousPeriod?.tacos || 0), 0) / displayedAccounts.length 
-    : 0;
+  // Default view - condensed metrics (no API PPC here, unfocused view).
+  //
+  // These were means of per-account rates, which is not the portfolio's ACOS:
+  // it gives a £50 account and a £50,000 account the same vote. Rebuilt from
+  // the GBP-normalised sums, so the figure is the one the money actually
+  // produced. Labels drop "Avg" accordingly.
+  const portfolioAcos = ratio(accountSums.ppcSpend, accountSums.ppcSales, 100);
+  const portfolioTacos = ratio(accountSums.ppcSpend, accountSums.sales, 100);
+  const prevPortfolioAcos = ratio(prevAccountSums.ppcSpend, prevAccountSums.ppcSales, 100);
+  const prevPortfolioTacos = ratio(prevAccountSums.ppcSpend, prevAccountSums.sales, 100);
 
   return (
     <div className="mb-8">
@@ -701,23 +736,25 @@ export const MetricsGrid = ({
         />
         
         <MetricsCard
-          title="Avg ACOS"
+          title="ACOS"
+          info="Total ad spend ÷ total PPC sales across every account shown. Not an average of per-account ACOS — that would weight a tiny account like a large one."
           invertSentiment
-          value={formatPercentage(avgAcos)}
+          value={ratePct(portfolioAcos)}
           color="text-purple-600"
-          currentValue={avgAcos}
-          previousValue={avgPreviousAcos}
+          currentValue={rateDelta(portfolioAcos)}
+          previousValue={rateDelta(prevPortfolioAcos)}
               comparisonLabel={comparisonLabel}
           isPercentage={true}
         />
-        
+
         <MetricsCard
-          title="Avg TACOS"
+          title="TACOS"
+          info="Total ad spend ÷ total sales across every account shown. Not an average of per-account TACOS."
           invertSentiment
-          value={formatPercentage(avgTacos)}
+          value={ratePct(portfolioTacos)}
           color="text-cyan-600"
-          currentValue={avgTacos}
-          previousValue={avgPreviousTacos}
+          currentValue={rateDelta(portfolioTacos)}
+          previousValue={rateDelta(prevPortfolioTacos)}
               comparisonLabel={comparisonLabel}
           isPercentage={true}
         />

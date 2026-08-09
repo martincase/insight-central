@@ -55,11 +55,17 @@ export function getCountryFromMerchantToken(merchantToken: string): string | nul
 }
 
 /**
- * Get currency info for a given country code
+ * Get currency info for a given country code.
+ *
+ * Also accepts a scope token, which may carry an arm suffix ('DE#Vendor' for
+ * the German vendor arm of a client who is both a vendor and a seller). The
+ * currency belongs to the marketplace, never to the arm, so the suffix is
+ * dropped — without this 'DE#Vendor' missed the map and printed euros as £.
  */
 export function getCurrencyInfo(countryCode: string | null): CurrencyInfo {
   if (!countryCode) return DEFAULT_CURRENCY;
-  return COUNTRY_CURRENCY_MAP[countryCode.toUpperCase()] || DEFAULT_CURRENCY;
+  const area = countryCode.split('#')[0];
+  return COUNTRY_CURRENCY_MAP[area.toUpperCase()] || DEFAULT_CURRENCY;
 }
 
 /**

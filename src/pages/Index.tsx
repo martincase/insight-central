@@ -132,6 +132,7 @@ import type { HybridDataStatus } from "@/types/hybridData";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PortfolioOverviewBar, type OverviewSortConfig } from "@/components/dashboard/PortfolioOverviewBar";
 import { buildAttentionMap } from "@/utils/accountAttention";
+import { isRollupScope, scopeArea, scopeArm } from '@/utils/scope';
 
 type FocusTab =
   | "performance"
@@ -1072,19 +1073,27 @@ const Index = () => {
     setFocusedCountryScope(null);
   }, [focusedAccountId]);
   useEffect(() => {
-    if (!focusedCountryScope && focusedBrandCountries.primary) {
-      setFocusedCountryScope(focusedBrandCountries.primary.country_code);
+    if (!focusedCountryScope && focusedBrandCountries.defaultScope) {
+      setFocusedCountryScope(focusedBrandCountries.defaultScope);
     }
-  }, [focusedCountryScope, focusedBrandCountries.primary]);
+  }, [focusedCountryScope, focusedBrandCountries.defaultScope]);
   const effectiveFocusedScope: CountryScope =
-    focusedCountryScope || focusedBrandCountries.primary?.country_code || "GB";
+    focusedCountryScope || focusedBrandCountries.defaultScope || "GB";
   const focusedScopeAccountKeys = (() => {
     const cs = focusedBrandCountries.countries;
     if (!cs.length) return undefined;
-    if (effectiveFocusedScope === 'ALL') return cs.map(c => c.sales_account_key).filter(Boolean);
-    if (effectiveFocusedScope === 'ALL_EU') return cs.filter(c => c.region === 'EU').map(c => c.sales_account_key).filter(Boolean);
-    const m = cs.find(c => c.country_code === effectiveFocusedScope);
-    return m ? [m.sales_account_key].filter(Boolean) : undefined;
+    const area = scopeArea(effectiveFocusedScope);
+    const arm = scopeArm(effectiveFocusedScope);
+    const keys = cs
+      .filter((c) => {
+        if (arm && c.arm !== arm) return false;
+        if (area === 'ALL') return true;
+        if (area === 'ALL_EU') return c.region === 'EU';
+        return c.country_code === area;
+      })
+      .map(c => c.sales_account_key)
+      .filter(Boolean);
+    return keys.length ? keys : undefined;
   })();
 
   // Country-scoped organic KPIs for the focused brand. Resolved by brand, so it
@@ -1447,14 +1456,18 @@ const Index = () => {
                   {focusedBrandCountries.isMultiCountry && focusedBrandCountries.spid && (
                     <div className="space-y-3">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-[10px] md:text-xs uppercase tracking-wide text-gray-500 font-semibold">Country scope</span>
+                        <span className="text-[10px] md:text-xs uppercase tracking-wide text-gray-500 font-semibold">
+                          {focusedBrandCountries.hasMultipleArms ? 'Business scope' : 'Country scope'}
+                        </span>
                         <CountrySwitcher
                           countries={focusedBrandCountries.countries}
                           scope={effectiveFocusedScope}
                           onChange={setFocusedCountryScope}
+                          arms={focusedBrandCountries.arms}
+                          clientName={focusedBrandCountries.clientName}
                         />
                       </div>
-                      {(effectiveFocusedScope === 'ALL_EU' || effectiveFocusedScope === 'ALL') && (
+                      {isRollupScope(effectiveFocusedScope) && (
                         <MultiCountryPanel
                           spid={focusedBrandCountries.spid}
                           scope={effectiveFocusedScope}

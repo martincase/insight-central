@@ -8,6 +8,7 @@ import { CountryScope } from './CountrySwitcher';
 import { getCurrencyInfo } from '@/utils/currencyUtils';
 import { useChartReady } from '@/hooks/useChartReady';
 import { SalesByWeekdayCard } from './SalesByWeekdayCard';
+import { isRollupScope } from '@/utils/scope';
 
 type Lens = 'weekday' | 'temperature' | 'weather' | 'promotions';
 
@@ -59,7 +60,7 @@ export function SalesDriversTab({ spid, scope, primaryCountry }: Props) {
   const fmtMoney = (v: number) =>
     `${cur.symbol}${new Intl.NumberFormat(cur.locale, { maximumFractionDigits: 0 }).format(v ?? 0)}`;
 
-  const isRollup = scope === 'ALL_EU' || scope === 'ALL';
+  const isRollup = isRollupScope(scope);
   const wxCountry = isRollup ? (primaryCountry || 'GB') : scope;
 
   useEffect(() => {

@@ -10,6 +10,7 @@ import { CountryScope } from './CountrySwitcher';
 import { DateFilter } from '@/types/dashboard';
 import { getCurrentDateRange } from '@/utils/dataProcessor';
 import { Package, TrendingUp, DollarSign, ShoppingCart, Info, Megaphone, ChevronRight, ChevronDown, Loader2 } from 'lucide-react';
+import { isRollupScope, scopeArea, scopeArm } from '@/utils/scope';
 
 
 interface Props {
@@ -22,6 +23,8 @@ interface Props {
 interface SalesRow {
   country_code: string;
   marketplace_id: string;
+  /** 'Vendor' / 'Seller' where one client trades through both. */
+  arm: string | null;
   currency: string;
   sales_native: number;
   units: number;
@@ -111,10 +114,16 @@ export function MultiCountryPanel({ spid, scope, dateFilter, customDateRange }: 
     };
   }, [spid, scope, pStart, pEnd]);
 
-  const isRollup = scope === 'ALL_EU' || scope === 'ALL';
+  const isRollup = isRollupScope(scope);
   const totalUnits = sales.reduce((s, r) => s + Number(r.units || 0), 0);
   const totalGbp = sales.reduce((s, r) => s + Number(r.sales_gbp || 0), 0);
   const singleRow = !isRollup ? sales[0] : null;
+  // A client with two arms has two rows in the same country. They are listed
+  // separately on purpose — never summed into one national line.
+  const splitByArm = sales.some((r) => r.arm) && new Set(sales.map((r) => r.arm)).size > 1;
+  const marketCount = new Set(sales.map((r) => r.country_code)).size;
+  const rowLabel = (r: SalesRow) =>
+    `${getCountryName(r.country_code)}${splitByArm && r.arm ? ` · ${r.arm}` : ''}`;
 
   const togglePool = async (poolKey: string) => {
     const next = new Set(expandedPools);
@@ -160,8 +169,8 @@ export function MultiCountryPanel({ spid, scope, dateFilter, customDateRange }: 
         </h2>
         <p className="text-xs md:text-sm text-muted-foreground">
           {isRollup
-            ? `${scope === 'ALL_EU' ? 'All EU marketplaces' : 'All enabled marketplaces'} · ${pStart} → ${pEnd}`
-            : `${getCountryName(scope)} · ${pStart} → ${pEnd}`}
+            ? `${scopeArea(scope) === 'ALL_EU' ? 'All EU marketplaces' : 'All enabled marketplaces'}${scopeArm(scope) ? ` · ${scopeArm(scope)}` : ''} · ${pStart} → ${pEnd}`
+            : `${getCountryName(scopeArea(scope))}${scopeArm(scope) ? ` · ${scopeArm(scope)}` : ''} · ${pStart} → ${pEnd}`}
         </p>
       </div>
 
@@ -199,7 +208,7 @@ export function MultiCountryPanel({ spid, scope, dateFilter, customDateRange }: 
         <Card>
           <CardContent className="p-4">
             <div className="text-xs text-muted-foreground flex items-center gap-1.5"><TrendingUp className="h-3.5 w-3.5" />Countries</div>
-            {loading ? <Skeleton className="h-7 w-16 mt-1" /> : <div className="text-lg md:text-2xl font-bold mt-1">{sales.length}</div>}
+            {loading ? <Skeleton className="h-7 w-16 mt-1" /> : <div className="text-lg md:text-2xl font-bold mt-1">{marketCount}</div>}
           </CardContent>
         </Card>
         <Card>
@@ -226,7 +235,7 @@ export function MultiCountryPanel({ spid, scope, dateFilter, customDateRange }: 
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Country</TableHead>
+                    <TableHead>{splitByArm ? 'Country · Arm' : 'Country'}</TableHead>
                     <TableHead className="text-right">Units</TableHead>
                     <TableHead className="text-right">Native sales</TableHead>
                     <TableHead className="text-right">GBP</TableHead>
@@ -239,11 +248,11 @@ export function MultiCountryPanel({ spid, scope, dateFilter, customDateRange }: 
                     .map((r) => {
                       const flag = getCountryFlagImage(r.country_code);
                       return (
-                        <TableRow key={r.marketplace_id || r.country_code}>
+                        <TableRow key={`${r.marketplace_id || r.country_code}-${r.arm ?? ''}`}>
                           <TableCell>
                             <span className="inline-flex items-center gap-2">
                               {flag && <img src={flag} alt="" className="h-3.5 w-5 object-cover rounded-sm" />}
-                              {getCountryName(r.country_code)}
+                              {rowLabel(r)}
                             </span>
                           </TableCell>
                           <TableCell className="text-right">{fmtInt(Number(r.units || 0))}</TableCell>

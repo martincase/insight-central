@@ -59,6 +59,7 @@ import { Sparkles } from 'lucide-react';
 import { useBrandCountries } from '@/hooks/useBrandCountries';
 import { useScopedMetrics } from '@/hooks/useScopedMetrics';
 import { CountrySwitcher, type CountryScope } from '@/components/dashboard/CountrySwitcher';
+import { isRollupScope, scopeArea, scopeArm } from '@/utils/scope';
 import { MultiCountryPanel } from '@/components/dashboard/MultiCountryPanel';
 import { SalesTrendCard } from '@/components/dashboard/SalesTrendCard';
 
@@ -238,9 +239,12 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
 
   const [countryScope, setCountryScope] = useState<CountryScope | null>(null);
   useEffect(() => {
-    if (!countryScope && brandCountries.primary) setCountryScope(brandCountries.primary.country_code);
-  }, [countryScope, brandCountries.primary]);
-  const effectiveScope: CountryScope = countryScope || brandCountries.primary?.country_code || 'GB';
+    // A client that trades through two Amazon accounts opens on their whole
+    // business (defaultScope 'ALL'); everyone else still opens on their primary
+    // marketplace exactly as before.
+    if (!countryScope && brandCountries.defaultScope) setCountryScope(brandCountries.defaultScope);
+  }, [countryScope, brandCountries.defaultScope]);
+  const effectiveScope: CountryScope = countryScope || brandCountries.defaultScope || 'GB';
 
   // Country-scoped organic KPIs. Resolved by brand so it follows the switcher
   // for vendors too, whose selling_partner_id differs in every marketplace.
@@ -827,20 +831,33 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
   }
 
   const countryInfo = getCountryInfo(account.merchantToken);
+  const scopeAreaCode = scopeArea(effectiveScope);
+  const scopeArmName = scopeArm(effectiveScope);
   const scopeFlag =
-    effectiveScope === 'ALL_EU' ? '/flags/eu.svg'
-    : effectiveScope === 'ALL' ? '/flags/world.svg'
-    : getCountryFlagImage(effectiveScope) || countryInfo.flagImage;
-  const scopeName =
-    effectiveScope === 'ALL_EU' ? 'All EU'
-    : effectiveScope === 'ALL' ? 'All countries'
-    : getCountryName(effectiveScope);
+    scopeAreaCode === 'ALL_EU' ? '/flags/eu.svg'
+    : scopeAreaCode === 'ALL' ? '/flags/world.svg'
+    : getCountryFlagImage(scopeAreaCode) || countryInfo.flagImage;
+  const scopeName = (() => {
+    const area =
+      scopeAreaCode === 'ALL_EU' ? 'All EU'
+      : scopeAreaCode === 'ALL'
+        ? (brandCountries.hasMultipleArms
+            ? (scopeArmName ? 'All countries' : 'Whole business')
+            : 'All countries')
+        : getCountryName(scopeAreaCode);
+    return scopeArmName ? `${area} · ${scopeArmName}` : area;
+  })();
+  /** Every registry row the current scope covers — country AND arm. */
+  const scopeCountries = brandCountries.countries.filter((c) => {
+    if (scopeArmName && c.arm !== scopeArmName) return false;
+    if (scopeAreaCode === 'ALL') return true;
+    if (scopeAreaCode === 'ALL_EU') return c.region === 'EU';
+    return c.country_code === scopeAreaCode;
+  });
   const scopeAccountKeys = (() => {
     if (!brandCountries.countries.length) return undefined;
-    if (effectiveScope === 'ALL') return brandCountries.countries.map(c => c.sales_account_key).filter(Boolean);
-    if (effectiveScope === 'ALL_EU') return brandCountries.countries.filter(c => c.region === 'EU').map(c => c.sales_account_key).filter(Boolean);
-    const match = brandCountries.countries.find(c => c.country_code === effectiveScope);
-    return match ? [match.sales_account_key].filter(Boolean) : undefined;
+    const keys = scopeCountries.map(c => c.sales_account_key).filter(Boolean);
+    return keys.length ? keys : undefined;
   })();
   const isAnyDataLoading = Object.values(loadingProgress).some(loading => loading);
 
@@ -848,12 +865,7 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
   // Empty ⇒ nothing is converted, and the basis note says so rather than leaving
   // the reader to assume.
   const convertedCurrencies: string[] = (() => {
-    const inScope = brandCountries.countries.filter((c) => {
-      if (effectiveScope === 'ALL') return true;
-      if (effectiveScope === 'ALL_EU') return c.region === 'EU';
-      return c.country_code === effectiveScope;
-    });
-    const source = inScope.length ? inScope : brandCountries.countries;
+    const source = scopeCountries.length ? scopeCountries : brandCountries.countries;
     // Only a multi-market roll-up is actually converted; a single non-GBP market
     // is shown in its own currency.
     if (source.length < 2) return [];
@@ -1006,26 +1018,52 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
                 />
               )}
               <h2 className="text-base md:text-xl font-bold text-gray-900 truncate">
-                {account.name}
+                {/* One business, one name. The share link resolves to a single
+                    Amazon account ('S Green & Sons' the vendor), but the page
+                    now covers the client — Ooble Home included. */}
+                {brandCountries.clientName || account.name}
               </h2>
-              <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] md:text-xs font-medium flex-shrink-0 ${
-                account.type === 'vendor' 
-                  ? 'bg-purple-100 text-purple-700' 
-                  : 'bg-blue-100 text-blue-700'
-              }`}>
-                {account.type === 'vendor' ? 'Vendor' : 'Seller'}
-              </span>
+              {/* The Vendor/Seller badge describes the ACCOUNT. Where a client
+                  is both, it belongs to the scope, not to the header — so it
+                  follows the switcher and disappears on the whole-business view. */}
+              {brandCountries.hasMultipleArms ? (
+                scopeArmName ? (
+                  <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] md:text-xs font-medium flex-shrink-0 ${
+                    scopeArmName === 'Vendor'
+                      ? 'bg-purple-100 text-purple-700'
+                      : 'bg-blue-100 text-blue-700'
+                  }`}>
+                    {scopeArmName}
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] md:text-xs font-medium flex-shrink-0 bg-gray-100 text-gray-700">
+                    {brandCountries.arms.join(' + ')}
+                  </span>
+                )
+              ) : (
+                <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] md:text-xs font-medium flex-shrink-0 ${
+                  account.type === 'vendor'
+                    ? 'bg-purple-100 text-purple-700'
+                    : 'bg-blue-100 text-blue-700'
+                }`}>
+                  {account.type === 'vendor' ? 'Vendor' : 'Seller'}
+                </span>
+              )}
               <span className="text-[10px] md:text-xs text-gray-500 hidden sm:inline flex-shrink-0">
                 {scopeName || 'Unknown Country'}
               </span>
             </div>
             {brandCountries.isMultiCountry && (
               <div className="mt-3 flex items-center gap-2 flex-wrap">
-                <span className="text-[10px] md:text-xs uppercase tracking-wide text-gray-500 font-semibold">Country scope</span>
+                <span className="text-[10px] md:text-xs uppercase tracking-wide text-gray-500 font-semibold">
+                  {brandCountries.hasMultipleArms ? 'Business scope' : 'Country scope'}
+                </span>
                 <CountrySwitcher
                   countries={brandCountries.countries}
                   scope={effectiveScope}
                   onChange={setCountryScope}
+                  arms={brandCountries.arms}
+                  clientName={brandCountries.clientName}
                 />
               </div>
             )}
@@ -1096,7 +1134,7 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
 
 
 
-            {brandCountries.isMultiCountry && brandCountries.spid && (effectiveScope === 'ALL_EU' || effectiveScope === 'ALL') && (
+            {brandCountries.isMultiCountry && brandCountries.spid && isRollupScope(effectiveScope) && (
               <MultiCountryPanel
                 spid={brandCountries.spid}
                 scope={effectiveScope}
@@ -1129,12 +1167,18 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
                 </Card>
               </div>
             ) : (() => {
-              const homeCountry = brandCountries.primary?.country_code || 'GB';
               // NB: vendors used to be forced down the home-scope branch here, which
               // is why picking Germany for Portwest kept showing the UK figures.
               // rpc_metrics_daily_country now covers vendor accounts, so the
               // country-scoped branch is correct for them too.
-              const isHomeScope = !brandCountries.isMultiCountry || effectiveScope === homeCountry;
+              //
+              // The home-scope branch reads account.merchantToken directly, so it
+              // can only ever see ONE Amazon account. A client that is two
+              // accounts always takes the scoped, RPC-driven branch — otherwise
+              // their whole-business view would quietly be the linked arm alone.
+              const isHomeScope = brandCountries.hasMultipleArms
+                ? false
+                : (!brandCountries.isMultiCountry || effectiveScope === (brandCountries.primary?.scope || 'GB'));
 
               if (!isHomeScope && brandCountries.spid) {
                 return (
@@ -1227,12 +1271,11 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
             })()}
 
             {(() => {
-              const homeCountry = brandCountries.primary?.country_code || 'GB';
-              // NB: vendors used to be forced down the home-scope branch here, which
-              // is why picking Germany for Portwest kept showing the UK figures.
-              // rpc_metrics_daily_country now covers vendor accounts, so the
-              // country-scoped branch is correct for them too.
-              const isHomeScope = !brandCountries.isMultiCountry || effectiveScope === homeCountry;
+              // Same gate as above: these panels are account-scoped, so a
+              // two-account client never renders them.
+              const isHomeScope = brandCountries.hasMultipleArms
+                ? false
+                : (!brandCountries.isMultiCountry || effectiveScope === (brandCountries.primary?.scope || 'GB'));
               if (!isHomeScope) return null;
               return (
                 <>

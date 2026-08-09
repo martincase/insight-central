@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Button } from '@/components/ui/button';
 import { ExternalLink, ChevronDown, ChevronUp } from 'lucide-react';
 import { CountryScope } from './CountrySwitcher';
+import { isRollupScope, scopeArea, scopeArm, scopeCountryCode } from '@/utils/scope';
 import { MetricsCard } from './MetricsCard';
 import { getCurrencyInfo } from '@/utils/currencyUtils';
 import { getCountryName } from '@/utils/countryUtils';
@@ -38,9 +39,13 @@ interface AsinRow {
 }
 
 const scopeLabel = (scope: CountryScope) => {
-  if (scope === 'ALL') return 'All countries';
-  if (scope === 'ALL_EU') return 'All EU';
-  return getCountryName(scope) || scope;
+  const area = scopeArea(scope);
+  const arm = scopeArm(scope);
+  const base =
+    area === 'ALL' ? 'All countries'
+    : area === 'ALL_EU' ? 'All EU'
+    : (getCountryName(area) || area);
+  return arm ? `${base} · ${arm}` : base;
 };
 
 export function CountryScopedPerformance({
@@ -59,7 +64,7 @@ export function CountryScopedPerformance({
   const { totals, previousTotals, series, days, loading, error: scopeError } = scopedMetrics;
 
   const cur = getCurrencyInfo(scope);
-  const isRollup = scope === 'ALL' || scope === 'ALL_EU';
+  const isRollup = isRollupScope(scope);
 
   const fmtMoney = (v: number) =>
     `${cur.symbol}${new Intl.NumberFormat(cur.locale, { maximumFractionDigits: 0 }).format(v ?? 0)}`;
@@ -357,7 +362,11 @@ export function CountryScopedPerformance({
                                   className="h-6 w-6 p-0"
                                   title="View on Amazon"
                                   onClick={() => window.open(
-                                    getAmazonProductUrl(row.child_asin, typeof scope === 'string' && scope.length === 2 ? `x-${scope}` : accountMerchantToken),
+                                    getAmazonProductUrl(
+                                      row.child_asin,
+                                      // The storefront is chosen by country, not by arm.
+                                      scopeCountryCode(scope) ? `x-${scopeCountryCode(scope)}` : accountMerchantToken,
+                                    ),
                                     '_blank'
                                   )}
                                 >

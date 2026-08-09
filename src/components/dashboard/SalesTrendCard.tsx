@@ -7,6 +7,7 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianG
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { getCountryName, getCountryFlagImage } from '@/utils/countryUtils';
 import { CountryScope } from './CountrySwitcher';
+import { isRollupScope, scopeArea } from '@/utils/scope';
 import { DateFilter } from '@/types/dashboard';
 import { getCurrentDateRange } from '@/utils/dataProcessor';
 import { getCurrencyInfo } from '@/utils/currencyUtils';
@@ -51,8 +52,10 @@ export function SalesTrendCard({ spid, scope, dateFilter, customDateRange, onDri
   const pStart = useMemo(() => format(range.from, 'yyyy-MM-dd'), [range.from]);
   const pEnd = useMemo(() => format(range.to, 'yyyy-MM-dd'), [range.to]);
 
-  const isRollup = scope === 'ALL_EU' || scope === 'ALL';
-  const wxCountry = isRollup ? (primaryCountry || 'GB') : scope;
+  // 'ALL#Vendor' is a rollup; 'GB#Vendor' is one marketplace. Weather and
+  // events are keyed on a real country, so the arm suffix is stripped.
+  const isRollup = isRollupScope(scope);
+  const wxCountry = isRollup ? (primaryCountry || 'GB') : scopeArea(scope);
   const wxCountryName = getCountryName(wxCountry);
   const cur = getCurrencyInfo(scope);
   const fmtMoney = (v: number) =>

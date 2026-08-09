@@ -15,6 +15,7 @@ import { Info, ChevronRight } from 'lucide-react';
 import { ProductPnlTable } from './ProductPnlTable';
 import { FeeDetailDialog, FeeItem } from './FeeDetailDialog';
 import { useChartReady } from '@/hooks/useChartReady';
+import { isRollupScope, scopeArea } from '@/utils/scope';
 
 interface Props {
   spid: string;
@@ -131,7 +132,7 @@ export function PnlDashboard({ spid, scope, dateFilter, customDateRange }: Props
     return () => { cancelled = true; clearTimeout(safetyTimer); };
   }, [spid, scope, pStart, pEnd]);
 
-  const isRollup = scope === 'ALL_EU' || scope === 'ALL';
+  const isRollup = isRollupScope(scope);
   const singleRow = !isRollup ? rows[0] : null;
   const currencyCountry = singleRow?.country_code || null;
 
@@ -195,7 +196,7 @@ export function PnlDashboard({ spid, scope, dateFilter, customDateRange }: Props
   const hasCostData = feeComposition.some((f) => Number.isFinite(f.amount) && f.amount > 0.01);
 
   const scopeLabel = isRollup
-    ? scope === 'ALL_EU' ? 'All EU marketplaces' : 'All enabled marketplaces'
+    ? scopeArea(scope) === 'ALL_EU' ? 'All EU marketplaces' : 'All enabled marketplaces'
     : getCountryName(scope);
   const [detailItem, setDetailItem] = useState<FeeItem | null>(null);
 

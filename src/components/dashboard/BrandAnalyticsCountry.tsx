@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { CountryScope } from './CountrySwitcher';
 import { getCountryName } from '@/utils/countryUtils';
 import { Users, Repeat, Search, ShoppingCart } from 'lucide-react';
+import { isRollupScope, scopeArea } from '@/utils/scope';
 
 interface Props {
   spid: string;
@@ -35,7 +36,9 @@ interface SearchQueryRow {
 }
 
 const scopeLabel = (scope: CountryScope) =>
-  scope === 'ALL_EU' ? 'All EU' : scope === 'ALL' ? 'All countries' : getCountryName(scope);
+  isRollupScope(scope)
+    ? (scopeArea(scope) === 'ALL_EU' ? 'All EU' : 'All countries')
+    : getCountryName(scopeArea(scope));
 
 const fmtInt = (n: number | null | undefined) =>
   n == null ? '—' : new Intl.NumberFormat('en-GB').format(Math.round(n));
@@ -104,7 +107,7 @@ export const BrandAnalyticsCountry = ({ spid, scope }: Props) => {
     () => queries.reduce((m, r) => Math.max(m, r.marketplaces ?? 0), 0),
     [queries]
   );
-  const isRollup = scope === 'ALL_EU' || scope === 'ALL';
+  const isRollup = isRollupScope(scope);
 
   const hasNoData = !loading && queries.length === 0 && (!summary || (summary.unique_customers == null && summary.repeat_customers == null));
 

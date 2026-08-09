@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
+import { makeScope } from '@/utils/scope';
 
 export interface BrandCountry {
   country_code: string;
@@ -9,6 +10,16 @@ export interface BrandCountry {
   region: string;
   is_primary: boolean;
   sales_account_key: string;
+  /**
+   * 'Vendor' / 'Seller' for a client that trades through more than one Amazon
+   * account, null for everyone else. Comes from month_end_client_map, the same
+   * table the monthly client emails use.
+   */
+  arm: string | null;
+  /** Scope token for this row — 'GB' or 'GB#Vendor'. See utils/scope. */
+  scope: string;
+  /** What the switcher prints: 'United Kingdom' or 'United Kingdom · Vendor'. */
+  label: string;
 }
 
 export interface UseBrandCountriesResult {
@@ -18,6 +29,14 @@ export interface UseBrandCountriesResult {
   isMultiCountry: boolean;
   loading: boolean;
   error: string | null;
+  /** Resolved client, e.g. 'S Green & Sons' for both the vendor and Ooble Home. */
+  clientName: string | null;
+  /** Distinct arms present, vendor first. Empty for a single-account client. */
+  arms: string[];
+  /** True when this client trades through more than one Amazon account. */
+  hasMultipleArms: boolean;
+  /** Scope the dashboard should open on. */
+  defaultScope: string | null;
 }
 
 /**
@@ -33,87 +52,105 @@ export function spidFromMerchantToken(merchantToken?: string | null): string | n
   return merchantToken;
 }
 
+/** Vendor before Seller, then anything else alphabetically. */
+const ARM_ORDER = ['Vendor', 'Seller'];
+const armRank = (arm: string) => {
+  const i = ARM_ORDER.indexOf(arm);
+  return i < 0 ? ARM_ORDER.length : i;
+};
+
+const EMPTY: UseBrandCountriesResult = {
+  spid: null,
+  countries: [],
+  primary: null,
+  isMultiCountry: false,
+  loading: false,
+  error: null,
+  clientName: null,
+  arms: [],
+  hasMultipleArms: false,
+  defaultScope: null,
+};
+
+interface ScopeRow {
+  client_name: string | null;
+  arm: string | null;
+  brand_name: string | null;
+  selling_partner_id: string | null;
+  sales_account_key: string | null;
+  marketplace_id: string | null;
+  country_code: string | null;
+  country_name: string | null;
+  region: string | null;
+  currency: string | null;
+  is_primary: boolean | null;
+  sort_order: number | null;
+}
+
 export function useBrandCountries(merchantToken?: string | null): UseBrandCountriesResult {
   const [state, setState] = useState<UseBrandCountriesResult>({
-    spid: null,
-    countries: [],
-    primary: null,
-    isMultiCountry: false,
+    ...EMPTY,
     loading: !!merchantToken,
-    error: null,
   });
 
   useEffect(() => {
     let cancelled = false;
     const spid = spidFromMerchantToken(merchantToken);
     if (!spid) {
-      setState({ spid: null, countries: [], primary: null, isMultiCountry: false, loading: false, error: null });
+      setState({ ...EMPTY });
       return;
     }
     setState((s) => ({ ...s, spid, loading: true, error: null }));
 
     (async () => {
       try {
-        const COLS =
-          'country_code, marketplace_id, currency, region, is_primary, sales_account_key, enabled, brand_name, selling_partner_id';
+        const rows = await loadScopeRows(spid);
+        if (cancelled) return;
 
-        const { data: bmRows, error: bmErr } = await supabase
-          .from('brand_marketplaces')
-          .select(COLS)
-          .eq('selling_partner_id', spid)
-          .eq('enabled', true);
-        if (bmErr) throw bmErr;
-
-        let rows = (bmRows || []) as any[];
-
-        // Vendors get a DIFFERENT selling_partner_id in every marketplace (Portwest GB is
-        // amzn1.vg.2072811, DE is amzn1.vg.5674352, and so on), so the spid lookup above
-        // finds one country and misses the rest. Sellers keep one id across all countries,
-        // where it works fine. Widen to the brand once we know which brand this is.
-        const brand = rows.find((r) => r.brand_name)?.brand_name;
-        if (brand) {
-          const { data: brandRows, error: brandErr } = await supabase
-            .from('brand_marketplaces')
-            .select(COLS)
-            .eq('brand_name', brand)
-            .eq('enabled', true);
-          if (brandErr) throw brandErr;
-
-          // Union on sales_account_key — that is the unique account×marketplace key.
-          const byKey = new Map<string, any>();
-          [...rows, ...((brandRows || []) as any[])].forEach((r) => {
-            if (r.sales_account_key) byKey.set(r.sales_account_key, r);
-          });
-          rows = Array.from(byKey.values());
-        }
-        const mktIds = Array.from(new Set(rows.map((r) => r.marketplace_id).filter(Boolean)));
-        let namesById = new Map<string, { country_name: string; sort_order: number }>();
-        if (mktIds.length) {
-          const { data: mktRows } = await supabase
-            .from('amazon_marketplaces')
-            .select('marketplace_id, country_name, sort_order')
-            .in('marketplace_id', mktIds);
-          (mktRows || []).forEach((m: any) => {
-            namesById.set(m.marketplace_id, { country_name: m.country_name, sort_order: m.sort_order ?? 999 });
-          });
-        }
+        const arms = Array.from(
+          new Set(rows.map((r) => r.arm).filter((a): a is string => !!a)),
+        ).sort((a, b) => armRank(a) - armRank(b) || a.localeCompare(b));
+        // One arm named on its own is not a split — Portwest's US seller and UK
+        // seller are the same arm. It takes two to need the '· Vendor' suffix.
+        const hasMultipleArms = arms.length >= 2;
 
         const countries: BrandCountry[] = rows
-          .map((r) => ({
-            country_code: r.country_code,
-            country_name: namesById.get(r.marketplace_id)?.country_name || r.country_code,
-            marketplace_id: r.marketplace_id,
-            currency: r.currency,
-            region: r.region,
-            is_primary: !!r.is_primary,
-            sales_account_key: r.sales_account_key,
-            _sort: namesById.get(r.marketplace_id)?.sort_order ?? 999,
-          }))
-          .sort((a: any, b: any) => a._sort - b._sort)
-          .map(({ _sort, ...c }: any) => c);
+          .map((r) => {
+            const code = r.country_code || '';
+            const name = r.country_name || code;
+            const arm = hasMultipleArms ? r.arm : null;
+            return {
+              country_code: code,
+              country_name: name,
+              marketplace_id: r.marketplace_id || '',
+              currency: r.currency || '',
+              region: r.region || '',
+              is_primary: !!r.is_primary,
+              sales_account_key: r.sales_account_key || '',
+              arm,
+              scope: makeScope(code, arm),
+              label: arm ? `${name} · ${arm}` : name,
+              _sort: r.sort_order ?? 999,
+              _spid: r.selling_partner_id || '',
+            };
+          })
+          .sort((a: any, b: any) =>
+            a._sort - b._sort ||
+            a.country_code.localeCompare(b.country_code) ||
+            armRank(a.arm || '') - armRank(b.arm || ''))
+          .map(({ _sort, _spid, ...c }: any) => c as BrandCountry);
 
-        const primary = countries.find((c) => c.is_primary) || countries[0] || null;
-        if (cancelled) return;
+        // "Primary" stays the marketplace the share link itself points at, so a
+        // single-account client is unaffected and a grouped client still knows
+        // which arm the visitor arrived through.
+        const own = rows.filter((r) => r.selling_partner_id === spid);
+        const ownPrimaryKey = (own.find((r) => r.is_primary) || own[0])?.sales_account_key;
+        const primary =
+          countries.find((c) => c.sales_account_key && c.sales_account_key === ownPrimaryKey) ||
+          countries.find((c) => c.is_primary) ||
+          countries[0] ||
+          null;
+
         setState({
           spid,
           countries,
@@ -126,10 +163,17 @@ export function useBrandCountries(merchantToken?: string | null): UseBrandCountr
           error: countries.length === 0
             ? `No enabled marketplaces are registered for ${merchantToken} in brand_marketplaces — country scope cannot be resolved.`
             : null,
+          clientName: rows.find((r) => r.client_name)?.client_name ?? null,
+          arms,
+          hasMultipleArms,
+          // A grouped client opens on their whole business. Landing on one arm
+          // is how S Green's dashboard came to show £79,758 of a £293,014
+          // business; the arm split is one click away in the switcher.
+          defaultScope: hasMultipleArms ? 'ALL' : (primary?.scope ?? null),
         });
       } catch (e: any) {
         if (cancelled) return;
-        setState({ spid, countries: [], primary: null, isMultiCountry: false, loading: false, error: e.message || 'Failed to load brand countries' });
+        setState({ ...EMPTY, spid, error: e?.message || 'Failed to load brand countries' });
       }
     })();
 
@@ -139,4 +183,84 @@ export function useBrandCountries(merchantToken?: string | null): UseBrandCountr
   }, [merchantToken]);
 
   return state;
+}
+
+/**
+ * rpc_client_scope resolves the client server-side, sharing the exact
+ * coalesce(client_name, account_name, brand_name) expression the month-end
+ * emails use — the dashboard cannot do that itself because month_end_client_map
+ * is not exposed to share-link visitors, and a second copy of the rule in
+ * TypeScript is how the two drifted apart in the first place.
+ *
+ * The brand_marketplaces path below is the pre-grouping behaviour, kept only as
+ * a fallback so a missing RPC degrades to today's single-account view rather
+ * than to a blank page.
+ */
+async function loadScopeRows(spid: string): Promise<ScopeRow[]> {
+  const { data, error } = await (supabase.rpc as any)('rpc_client_scope', { p_spid: spid });
+  if (!error && Array.isArray(data) && data.length) return data as ScopeRow[];
+  if (error) console.warn('rpc_client_scope unavailable, falling back to brand widening', error);
+  return loadScopeRowsFromRegistry(spid);
+}
+
+async function loadScopeRowsFromRegistry(spid: string): Promise<ScopeRow[]> {
+  const COLS =
+    'country_code, marketplace_id, currency, region, is_primary, sales_account_key, enabled, brand_name, selling_partner_id';
+
+  const { data: bmRows, error: bmErr } = await supabase
+    .from('brand_marketplaces')
+    .select(COLS)
+    .eq('selling_partner_id', spid)
+    .eq('enabled', true);
+  if (bmErr) throw bmErr;
+
+  let rows = (bmRows || []) as any[];
+
+  // Vendors get a DIFFERENT selling_partner_id in every marketplace (Portwest GB is
+  // amzn1.vg.2072811, DE is amzn1.vg.5674352, and so on), so the spid lookup above
+  // finds one country and misses the rest. Sellers keep one id across all countries,
+  // where it works fine. Widen to the brand once we know which brand this is.
+  const brand = rows.find((r) => r.brand_name)?.brand_name;
+  if (brand) {
+    const { data: brandRows, error: brandErr } = await supabase
+      .from('brand_marketplaces')
+      .select(COLS)
+      .eq('brand_name', brand)
+      .eq('enabled', true);
+    if (brandErr) throw brandErr;
+
+    // Union on sales_account_key — that is the unique account×marketplace key.
+    const byKey = new Map<string, any>();
+    [...rows, ...((brandRows || []) as any[])].forEach((r) => {
+      if (r.sales_account_key) byKey.set(r.sales_account_key, r);
+    });
+    rows = Array.from(byKey.values());
+  }
+
+  const mktIds = Array.from(new Set(rows.map((r) => r.marketplace_id).filter(Boolean)));
+  const namesById = new Map<string, { country_name: string; sort_order: number }>();
+  if (mktIds.length) {
+    const { data: mktRows } = await supabase
+      .from('amazon_marketplaces')
+      .select('marketplace_id, country_name, sort_order')
+      .in('marketplace_id', mktIds);
+    (mktRows || []).forEach((m: any) => {
+      namesById.set(m.marketplace_id, { country_name: m.country_name, sort_order: m.sort_order ?? 999 });
+    });
+  }
+
+  return rows.map((r) => ({
+    client_name: r.brand_name ?? null,
+    arm: null,
+    brand_name: r.brand_name ?? null,
+    selling_partner_id: r.selling_partner_id ?? null,
+    sales_account_key: r.sales_account_key ?? null,
+    marketplace_id: r.marketplace_id ?? null,
+    country_code: r.country_code ?? null,
+    country_name: namesById.get(r.marketplace_id)?.country_name ?? r.country_code ?? null,
+    region: r.region ?? null,
+    currency: r.currency ?? null,
+    is_primary: !!r.is_primary,
+    sort_order: namesById.get(r.marketplace_id)?.sort_order ?? 999,
+  }));
 }

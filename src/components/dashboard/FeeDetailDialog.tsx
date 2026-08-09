@@ -11,6 +11,7 @@ import { DateFilter } from '@/types/dashboard';
 import { getCurrentDateRange } from '@/utils/dataProcessor';
 import { Info } from 'lucide-react';
 import { ASINLink } from '@/components/common/ASINLink';
+import { isRollupScope } from '@/utils/scope';
 
 export type FeeItemKind = 'fee-total' | 'ads' | 'cogs' | 'fee-category';
 
@@ -97,7 +98,7 @@ export function FeeDetailDialog({
   const pStart = useMemo(() => format(range.from, 'yyyy-MM-dd'), [range.from]);
   const pEnd = useMemo(() => format(range.to, 'yyyy-MM-dd'), [range.to]);
 
-  const isRollup = scope === 'ALL_EU' || scope === 'ALL';
+  const isRollup = isRollupScope(scope);
   const cur = getCurrencyInfo(scope);
   const fmtMoney = (v: number) =>
     `${cur.symbol}${new Intl.NumberFormat(cur.locale, { maximumFractionDigits: 0 }).format(v ?? 0)}`;
