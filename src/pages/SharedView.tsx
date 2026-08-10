@@ -216,7 +216,9 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
   const [unlockModalOpen, setUnlockModalOpen] = useState(false);
   const [unlockAutoShown, setUnlockAutoShown] = useState(false);
   const dismissKey = account?.shareCode ? `unlock-modal-dismissed:${account.shareCode}` : null;
-  const brandCountries = useBrandCountries(account?.merchantToken);
+  // account.name decides whether this link IS the client's primary account —
+  // 'S Green & Sons' opens on the whole business, 'Ooble Home' opens on Ooble.
+  const brandCountries = useBrandCountries(account?.merchantToken, { accountName: account?.name });
   const [budgetsEnabled, setBudgetsEnabled] = useState(false);
   const [budgetsConfig, setBudgetsConfig] = useState<Record<string, any> | null>(null);
   useEffect(() => {
@@ -239,9 +241,10 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
 
   const [countryScope, setCountryScope] = useState<CountryScope | null>(null);
   useEffect(() => {
-    // A client that trades through two Amazon accounts opens on their whole
-    // business (defaultScope 'ALL'); everyone else still opens on their primary
-    // marketplace exactly as before.
+    // Where the page opens is decided in useBrandCountries: a client's primary
+    // account opens on the whole business, a secondary arm (Ooble Home, Workwear
+    // Depot) opens on itself, and a single-account client opens on its primary
+    // marketplace exactly as before. Either way the switcher holds the rest.
     if (!countryScope && brandCountries.defaultScope) setCountryScope(brandCountries.defaultScope);
   }, [countryScope, brandCountries.defaultScope]);
   const effectiveScope: CountryScope = countryScope || brandCountries.defaultScope || 'GB';
@@ -814,15 +817,33 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
     );
   }
 
-  if (!account) {
+  // An unresolvable link and a closed account look the same to a visitor, and
+  // both must look like nothing. rpc_resolve_share already refuses anything that
+  // is not `status = 'active'`; the status re-check below is the second lock, so
+  // a stale cache or a future change to the RPC cannot put a closed account's
+  // figures back on screen. The demo account (inactive, no registered
+  // marketplaces) used to render a full dashboard down to "PPC SPEND £5,949.83".
+  if (!account || account.status !== 'active') {
+    if (account) {
+      console.error(
+        `[SharedView] Refusing to render ${account.name} (${account.merchantToken}): ` +
+        `accounts_master.status is '${account.status}', not 'active'.`,
+      );
+    }
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-cyan-50 p-8">
         <div className="max-w-4xl mx-auto">
           <div className="bg-white p-8 rounded-lg shadow">
-            <h1 className="text-2xl font-bold mb-4 text-red-600">Share Not Found</h1>
-            <p className="mb-4">{status}</p>
+            <h1 className="text-2xl font-bold mb-4 text-gray-900">This dashboard isn't available</h1>
+            <p className="mb-4 text-gray-700">
+              This link is no longer active, or the address is not quite right.
+            </p>
             <p className="text-sm text-gray-500">
-              Please check the link or contact your account manager for assistance.
+              Please check the link, or contact us at{' '}
+              <a href="mailto:hello@martincase.co.uk" className="text-blue-600 hover:text-blue-800 underline">
+                hello@martincase.co.uk
+              </a>{' '}
+              and we will send you a current one.
             </p>
           </div>
         </div>

@@ -1,4 +1,4 @@
-import { parse, isWithinInterval, format, subDays, startOfWeek, endOfWeek, subWeeks, startOfMonth, endOfMonth, subMonths, startOfYear, isSameDay, differenceInDays, parseISO } from 'date-fns';
+import { parse, isWithinInterval, format, subDays, startOfDay, startOfWeek, endOfWeek, subWeeks, startOfMonth, endOfMonth, subMonths, startOfYear, isSameDay, isSameMonth, differenceInDays, differenceInCalendarDays, parseISO } from 'date-fns';
 import type { AccountData, DateFilter } from '@/types/dashboard';
 import { calculateVendorPeriodData } from './vendorProcessor';
 import { hybridDataService, type HybridDataResult } from './hybridDataService';
@@ -250,15 +250,51 @@ export const getPreviousDateRange = (dateFilter: DateFilter, customDateRange?: {
       return { from: startOfYear(subMonths(today, 12)), to: endOfMonth(subMonths(today, 1)) };
     case 'custom':
       if (customDateRange && customDateRange.from && customDateRange.to) {
-        const daysDiff = Math.ceil((customDateRange.to.getTime() - customDateRange.from.getTime()) / (1000 * 60 * 60 * 24));
-        const previousFrom = new Date(customDateRange.from.getTime() - (daysDiff + 1) * 24 * 60 * 60 * 1000);
-        const previousTo = new Date(customDateRange.from.getTime() - 24 * 60 * 60 * 1000);
-        return { from: previousFrom, to: previousTo };
+        return getPreviousRangeForCustom(customDateRange);
       }
       return { from: subDays(today, 14), to: subDays(today, 8) };
     default:
       return { from: subDays(today, 14), to: subDays(today, 8) };
   }
+};
+
+/** Does an explicit range cover exactly one whole calendar month? */
+export const isWholeCalendarMonth = (range: { from: Date; to: Date }): boolean => {
+  const from = startOfDay(range.from);
+  const to = startOfDay(range.to);
+  if (from.getDate() !== 1) return false;
+  if (!isSameMonth(from, to)) return false;
+  return to.getDate() === endOfMonth(from).getDate();
+};
+
+/**
+ * Baseline for an explicitly chosen date range.
+ *
+ * A WHOLE CALENDAR MONTH compares against the whole PREVIOUS CALENDAR MONTH —
+ * byte-for-byte what the "Last Month" preset does. That equivalence is the whole
+ * point: the month-end client email deep-links to ?month=YYYY-MM, and the client
+ * must be shown the same verdict there as in the picker. Treating July as "31
+ * days, so compare with the 31 days before it" put the baseline at 30 May – 30
+ * Jun and turned Dragonfly's +0.8% into −5.1% — the email said level, the
+ * dashboard said down.
+ *
+ * Anything else compares against the same number of days immediately before.
+ * Calendar-day arithmetic (not raw milliseconds) so an end-of-day timestamp or a
+ * DST boundary cannot bleed an extra day into the baseline — that off-by-one is
+ * what produced "31d vs 32d" on a month-long range.
+ */
+export const getPreviousRangeForCustom = (range: { from: Date; to: Date }) => {
+  const from = startOfDay(range.from);
+  const to = startOfDay(range.to);
+
+  if (isWholeCalendarMonth(range)) {
+    const previousMonth = subMonths(from, 1);
+    return { from: startOfMonth(previousMonth), to: endOfMonth(previousMonth) };
+  }
+
+  const lengthDays = Math.max(1, differenceInCalendarDays(to, from) + 1);
+  const previousTo = subDays(from, 1);
+  return { from: subDays(previousTo, lengthDays - 1), to: previousTo };
 };
 
 export const calculatePeriodData = (

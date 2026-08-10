@@ -1,5 +1,5 @@
 import { differenceInCalendarDays, format, isSameMonth, isSameYear, subDays } from 'date-fns';
-import { getCurrentDateRange, getPreviousDateRange } from './dataProcessor';
+import { getCurrentDateRange, getPreviousDateRange, isWholeCalendarMonth } from './dataProcessor';
 import type { DateFilter } from '@/types/dashboard';
 
 /**
@@ -27,13 +27,9 @@ type Range = { from: Date; to: Date };
 
 const dayCount = (r: Range) => differenceInCalendarDays(r.to, r.from) + 1;
 
-/** Does the range cover exactly one whole calendar month? */
-const isWholeCalendarMonth = (r: Range) => {
-  if (r.from.getDate() !== 1) return false;
-  if (!isSameMonth(r.from, r.to)) return false;
-  const lastDay = new Date(r.to.getFullYear(), r.to.getMonth() + 1, 0).getDate();
-  return r.to.getDate() === lastDay;
-};
+/* Whole-calendar-month detection lives in dataProcessor, next to the baseline
+   rule that depends on it — two copies of "is this a whole month?" is how the
+   label and the figure it captions could disagree. */
 
 /** "3–9 Aug 2026" when inside one month, otherwise "28 Jul – 3 Aug 2026". */
 export const formatRangeShort = (r: Range) => {

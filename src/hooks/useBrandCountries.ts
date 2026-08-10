@@ -39,6 +39,23 @@ export interface UseBrandCountriesResult {
   defaultScope: string | null;
 }
 
+/** Options for useBrandCountries. */
+export interface UseBrandCountriesOptions {
+  /**
+   * accounts_master.account_name of the account the share link resolved to.
+   * Decides whether this link is the client's primary account (see
+   * `defaultScope` below). Omit and every grouped link opens on its own arm.
+   */
+  accountName?: string | null;
+}
+
+/** Case/punctuation-insensitive name match — 'S Green & Sons' vs 's green and sons'. */
+const sameName = (a?: string | null, b?: string | null): boolean => {
+  if (!a || !b) return false;
+  const norm = (s: string) => s.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]/g, '');
+  return norm(a) === norm(b);
+};
+
 /**
  * Strip trailing -XX country suffix from a merchantToken to get the seller_partner_id.
  * Example: A3K5KN6RHD3NG3-GB -> A3K5KN6RHD3NG3
@@ -87,7 +104,11 @@ interface ScopeRow {
   sort_order: number | null;
 }
 
-export function useBrandCountries(merchantToken?: string | null): UseBrandCountriesResult {
+export function useBrandCountries(
+  merchantToken?: string | null,
+  options: UseBrandCountriesOptions = {},
+): UseBrandCountriesResult {
+  const accountName = options.accountName ?? null;
   const [state, setState] = useState<UseBrandCountriesResult>({
     ...EMPTY,
     loading: !!merchantToken,
@@ -151,36 +172,75 @@ export function useBrandCountries(merchantToken?: string | null): UseBrandCountr
           countries[0] ||
           null;
 
+        const clientName = rows.find((r) => r.client_name)?.client_name ?? null;
+
+        // Is this share link the client's PRIMARY account — the one the client
+        // is named after? 'S Green & Sons' the vendor account is; Ooble Home,
+        // Workwear Depot and Workwear Depot UK are not.
+        const isClientPrimaryAccount =
+          sameName(accountName, clientName) ||
+          own.some((r) => sameName(r.brand_name, clientName));
+
+        // Where a link should open.
+        //
+        //   primary account of a grouped client → 'ALL', the whole business
+        //   any other arm of a grouped client   → that arm's own scope
+        //   single-account client               → its primary marketplace
+        //
+        // Opening EVERY grouped link on 'ALL' was the regression: a Workwear
+        // Depot customer clicked their own link and got Portwest's £1,204,964
+        // across 12 countries. Opening every grouped link on its own arm would
+        // undo the fix that took S Green's headline from £79,758 back to the
+        // £293,014 they actually trade — their main link is the client. So the
+        // rule turns on which of the two a link is, and the other view is
+        // always one click away in the switcher.
+        const defaultScope = hasMultipleArms
+          ? (isClientPrimaryAccount ? 'ALL' : (primary?.scope ?? 'ALL'))
+          : (primary?.scope ?? null);
+
+        if (countries.length === 0) {
+          // Loud for us, plain for the client. An unresolvable scope used to
+          // fall through to the 'GB' default in every caller, which renders the
+          // UK numbers under whatever country the switcher happens to show — so
+          // it must still shout. It shouted at the CLIENT, though, naming the
+          // merchant token and the brand_marketplaces table on the page.
+          console.error(
+            `[useBrandCountries] No enabled marketplaces are registered for ${merchantToken} ` +
+            `in brand_marketplaces — country scope cannot be resolved.`,
+          );
+        }
+
         setState({
           spid,
           countries,
           primary,
           isMultiCountry: countries.length >= 2,
           loading: false,
-          // Loud on purpose: an unresolvable scope used to fall through to the
-          // 'GB' default in every caller, which renders the UK numbers under
-          // whatever country the switcher happens to be showing.
           error: countries.length === 0
-            ? `No enabled marketplaces are registered for ${merchantToken} in brand_marketplaces — country scope cannot be resolved.`
+            ? 'This dashboard is not available. Please contact hello@martincase.co.uk.'
             : null,
-          clientName: rows.find((r) => r.client_name)?.client_name ?? null,
+          clientName,
           arms,
           hasMultipleArms,
-          // A grouped client opens on their whole business. Landing on one arm
-          // is how S Green's dashboard came to show £79,758 of a £293,014
-          // business; the arm split is one click away in the switcher.
-          defaultScope: hasMultipleArms ? 'ALL' : (primary?.scope ?? null),
+          defaultScope,
         });
       } catch (e: any) {
         if (cancelled) return;
-        setState({ ...EMPTY, spid, error: e?.message || 'Failed to load brand countries' });
+        // Same split as above: the real message goes to the console, the client
+        // gets a sentence rather than transport or Postgres text.
+        console.error('[useBrandCountries] Failed to load brand countries', e);
+        setState({
+          ...EMPTY,
+          spid,
+          error: 'This dashboard is not available. Please contact hello@martincase.co.uk.',
+        });
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [merchantToken]);
+  }, [merchantToken, accountName]);
 
   return state;
 }
