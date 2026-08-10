@@ -13,6 +13,7 @@ import { differenceInDays, parseISO, format } from 'date-fns';
 import { useASINDetail } from '@/hooks/useASINDetail';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { getCurrencyInfo } from '@/utils/currencyUtils';
+import { formatMoney } from '@/utils/formatters';
 import { useCurrentStockSnapshot } from '@/hooks/useCurrentStockSnapshot';
 import { ageInDays, STOCKOUT_HISTORY_STALE_DAYS } from '@/utils/stockDataQuality';
 import type { CountryScope } from './CountrySwitcher';
@@ -139,10 +140,8 @@ const StatusBadge = ({ status }: { status: string | null }) => {
 
 export const StockoutImpactSection = ({ merchantToken, accountKeys, scope }: StockoutImpactSectionProps) => {
   const cur = getCurrencyInfo(scope);
-  const formatCurrency = (val: number | null) => {
-    if (val == null) return '—';
-    return `${cur.symbol}${new Intl.NumberFormat(cur.locale, { maximumFractionDigits: 0 }).format(val)}`;
-  };
+  // Shared helper: keeps the minus in front of the symbol ("-£283", not "£-283").
+  const formatCurrency = (val: number | null) => (val == null ? '—' : formatMoney(val, cur, 0));
   const [data, setData] = useState<StockoutEvent[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');

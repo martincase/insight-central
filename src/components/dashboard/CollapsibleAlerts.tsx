@@ -38,10 +38,15 @@ export const CollapsibleAlerts = ({ merchantToken, accountName, hideConfigButton
     const fetchCount = async () => {
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      // The label says "Active", so the count has to mean it. This counted
+      // every alert raised in the last seven days regardless of status, so a
+      // retracted or resolved alert still drove the badge and forced the panel
+      // open — with ClientAlertsCard greying out the very alert being counted.
       const { count } = await supabase
         .from('client_threshold_alerts')
         .select('*', { count: 'exact', head: true })
         .eq('merchant_token', merchantToken)
+        .eq('status', 'active')
         .gte('detection_date', sevenDaysAgo.toISOString().split('T')[0]);
       setClientAlertCount(count || 0);
     };

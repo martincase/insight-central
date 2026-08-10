@@ -8,7 +8,7 @@ import { Package, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown, Tr
 import { supabase } from '@/integrations/supabase/client';
 import { Skeleton } from '@/components/ui/skeleton';
 import { getCurrencyInfo } from '@/utils/currencyUtils';
-import { formatMoney } from '@/utils/formatters';
+import { conversionDisplay, formatMoney } from '@/utils/formatters';
 import type { CountryScope } from '@/components/dashboard/CountrySwitcher';
 
 interface ApiAdvertisedProductsDashboardProps {
@@ -465,9 +465,21 @@ export function ApiAdvertisedProductsDashboard({ accountName, scope }: ApiAdvert
                       <TableCell className="text-right tabular-nums">{fmtMoney(row.spend)}</TableCell>
                       <TableCell className="text-right tabular-nums font-medium">{fmtMoney(row.sales)}</TableCell>
                       <TableCell className="text-right tabular-nums">{row.orders.toLocaleString()}</TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {row.clicks > 0 ? `${((row.orders / row.clicks) * 100).toFixed(1)}%` : '0.0%'}
-                      </TableCell>
+                      {/* Orders can exceed clicks under Amazon's attribution
+                          window, so the figure switches to orders-per-click
+                          rather than printing an impossible "200.0%" rate. */}
+                      {(() => {
+                        const conv = conversionDisplay(row.orders, row.clicks);
+                        return (
+                          <TableCell
+                            className={`text-right tabular-nums ${conv.value == null ? 'text-muted-foreground' : ''}`}
+                            title={conv.note}
+                          >
+                            {conv.text}
+                            {conv.exceedsCeiling && <span className="text-muted-foreground ml-0.5">*</span>}
+                          </TableCell>
+                        );
+                      })()}
                       <TableCell className="text-right tabular-nums">
                         <span className={!Number.isFinite(row.acos) || (row.spend > 0 && row.sales === 0) ? 'text-muted-foreground' : ''}>
                           {(!Number.isFinite(row.acos) || (row.spend > 0 && row.sales === 0)) ? 'N/A' : `${row.acos.toFixed(1)}%`}
@@ -484,6 +496,14 @@ export function ApiAdvertisedProductsDashboard({ accountName, scope }: ApiAdvert
                 </TableBody>
               </Table>
             </div>
+
+            {pageData.some(r => r.clicks > 0 && r.orders > r.clicks) && (
+              <p className="text-[11px] text-muted-foreground mt-2">
+                * More orders than clicks. Amazon attributes an order to a click for days
+                afterwards and one click can carry more than one order, so Conv % is shown
+                as orders per click — a conversion rate cannot exceed 100%.
+              </p>
+            )}
 
             {totalCount > 0 && (
               <div className="flex items-center justify-between pt-4 border-t border-border flex-wrap gap-2">

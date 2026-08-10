@@ -23,6 +23,7 @@ import {
   Legend,
 } from 'recharts';
 import { getCurrencyInfo } from '@/utils/currencyUtils';
+import { formatMoney } from '@/utils/formatters';
 import { useChartReady } from '@/hooks/useChartReady';
 import type { AddonSectionProps } from '@/addons/registry';
 import { BudgetUploadDialog } from './BudgetUploadDialog';
@@ -118,11 +119,11 @@ export function BudgetsSection(props: AddonSectionProps) {
   const effectiveGbp = showGbp || isRollup;
   const displayCur = effectiveGbp ? getCurrencyInfo('GB') : cur;
 
+  // Through the shared helper, so a negative variance reads "-£283" and not
+  // "£-283". Building the string as `${symbol}${value}` put the minus between
+  // the symbol and the digits on every negative in the weekly variance table.
   const fmtMoney = useCallback(
-    (v: number | null | undefined) => {
-      const n = Number(v || 0);
-      return `${displayCur.symbol}${new Intl.NumberFormat(displayCur.locale, { maximumFractionDigits: 0 }).format(n)}`;
-    },
+    (v: number | null | undefined) => formatMoney(Number(v || 0), displayCur, 0),
     [displayCur],
   );
   const fmtPct = (v: number | null | undefined) => (v == null || !Number.isFinite(v) ? '—' : `${v.toFixed(1)}%`);
