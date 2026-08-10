@@ -8,6 +8,7 @@ import type { AccountData, DateFilter } from '@/types/dashboard';
 import type { ApiPpcMetrics, AdType, ApiPpcDailyRow } from '@/hooks/useApiPpcData';
 import { isVendorAccount as isVendorAccountCheck } from '@/utils/vendorUtils';
 import type { UseScopedMetricsResult } from '@/hooks/useScopedMetrics';
+import { describeMissingDates } from '@/utils/kpiIntegrity';
 import { AlertTriangle } from 'lucide-react';
 import { getComparisonLabel } from '@/utils/comparisonLabels';
 import { VENDOR_LAG_DAYS } from '@/utils/asinProcessor';
@@ -173,12 +174,52 @@ export const MetricsGrid = ({
   const scopedPrev = scopedMetrics?.previousTotals ?? null;
   const scopeError = scopedMetrics?.error ?? null;
 
+  // ---------------------------------------------------------------------
+  // Data completeness.
+  //
+  // Lockabox's SP-API credential died on 2 July. Its ads feed kept running, so
+  // "Last Month" showed two days of sales (£5,048), a 91.8%-worse delta against
+  // a real June, a TACOS of 109.3% and an Advertising % of 524.8% — a full
+  // month of ad spend divided into two days of revenue. Nothing on the page
+  // used the word incomplete. Where the sales series does not cover the period,
+  // the total is qualified, the comparison is withheld and every ratio that
+  // mixes complete advertising with incomplete sales is withheld with it.
+  // ---------------------------------------------------------------------
+  const completeness = scopedMetrics?.completeness ?? null;
+  const salesIncomplete = !!completeness?.materiallyIncomplete;
+  const incompleteNote = salesIncomplete
+    ? `Withheld — only ${completeness!.presentDays} of ${completeness!.expectedDays} days of sales data`
+    : undefined;
+  // Nothing at all arrived. "£0" and "0.0%" are measurements; this is an
+  // absence, and an absence prints as '—'.
+  const scopedEmpty = completeness?.level === 'empty';
+  const partialQualifier = salesIncomplete && !scopedEmpty
+    ? `Partial period — ${completeness!.presentDays} of ${completeness!.expectedDays} days`
+    : undefined;
+
   const totalMetrics = scoped
     ? { ...baseTotalMetrics, sales: scoped.sales, unitsOrdered: scoped.unitsOrdered, pageViews: scoped.pageViews }
     : baseTotalMetrics;
   const totalPreviousMetrics = scopedPrev
     ? { ...basePreviousMetrics, sales: scopedPrev.sales, unitsOrdered: scopedPrev.unitsOrdered, pageViews: scopedPrev.pageViews }
     : basePreviousMetrics;
+
+  // ---------------------------------------------------------------------
+  // Does this account advertise at all?
+  //
+  // Suu Balm Australia runs no advertising. Falling back to the account
+  // aggregate produced a clean set of zeroes — PPC SPEND $0, PPC SALES $0,
+  // TACOS 0.0%, ADVERTISING % 0.0%, CPA $0 — every one of which reads as a
+  // measured result. "Zero spend at zero cost" is a very good month; "we have
+  // no ad data" is not a month at all. ACOS, CPC and CTR already printed '—'
+  // because their denominators were zero; the rest now say the same thing.
+  // ---------------------------------------------------------------------
+  const fallbackHasAds =
+    (Number(totalMetrics.ppcSpend) || 0) > 0 ||
+    (Number(totalMetrics.ppcSales) || 0) > 0 ||
+    (Number(totalMetrics.impressions) || 0) > 0 ||
+    (Number(totalMetrics.clicks) || 0) > 0;
+  const adsAvailable = hasApiPpc || fallbackHasAds;
 
   // PPC metrics: use API if available, otherwise fall back to daily_asin_data
   const ppcSpend = hasApiPpc ? apiPpcMetrics.spend : totalMetrics.ppcSpend;
@@ -189,10 +230,13 @@ export const MetricsGrid = ({
   // Derived from the four sums immediately above, whichever source they came
   // from — so the rate and the numbers it is made of can never disagree, and a
   // multi-account set gets one true rate rather than a mean of per-account ones.
-  const ppcCpc = ratio(ppcSpend, ppcClicks);
-  const ppcCtr = ratio(ppcClicks, ppcImpressions, 100);
-  const ppcAcos = ratio(ppcSpend, ppcSales, 100);
-  const ppcCpa = ratio(ppcSpend, ppcOrders);
+  const ppcCpc = adsAvailable ? ratio(ppcSpend, ppcClicks) : null;
+  const ppcCtr = adsAvailable ? ratio(ppcClicks, ppcImpressions, 100) : null;
+  const ppcAcos = adsAvailable ? ratio(ppcSpend, ppcSales, 100) : null;
+  // CPA falls back to total units ordered when there is no ads feed, so without
+  // this gate an account that never advertised showed "CPA $0" — spend of zero
+  // spread over organic orders.
+  const ppcCpa = adsAvailable ? ratio(ppcSpend, ppcOrders) : null;
 
   const prevPpcSpend = hasApiPpc && apiPpcPreviousMetrics ? apiPpcPreviousMetrics.spend : totalPreviousMetrics.ppcSpend;
   const prevPpcSales = hasApiPpc && apiPpcPreviousMetrics ? apiPpcPreviousMetrics.sales : totalPreviousMetrics.ppcSales;
@@ -204,14 +248,28 @@ export const MetricsGrid = ({
   const prevPpcAcos = ratio(prevPpcSpend, prevPpcSales, 100);
   const prevPpcCpa = ratio(prevPpcSpend, prevPpcOrders);
 
-  // TACOS = ad spend ÷ TOTAL sales. Withheld when there are no sales to divide
-  // by; "0.0%" would read as "advertising is free", not "unknown".
-  const tacos = ratio(ppcSpend, totalMetrics.sales, 100);
-  const prevTacos = ratio(prevPpcSpend, totalPreviousMetrics.sales, 100);
+  // A number the account has no data for is '—', not zero.
+  const adsMoney = (v: number) => (adsAvailable ? formatCurrencyForMetrics(v) : '—');
+  const adsCount = (v: number) => (adsAvailable ? Math.round(v).toLocaleString() : '—');
+  /** Organic figures, withheld outright when the scope reported nothing. */
+  const orgMoney = (v: number) => (scopedEmpty ? '—' : formatCurrencyForMetrics(v));
+  const orgCount = (v: number) => (scopedEmpty ? '—' : Math.round(v).toLocaleString());
+  const orgPct = (v: number) => (scopedEmpty ? '—' : formatPercentage(v));
 
-  // Advertising reliance
-  const advertisingReliance = totalMetrics.sales > 0 ? (ppcSales / totalMetrics.sales) * 100 : 0;
-  const prevAdvertisingReliance = totalPreviousMetrics.sales > 0 ? (prevPpcSales / totalPreviousMetrics.sales) * 100 : 0;
+  // TACOS = ad spend ÷ TOTAL sales. Withheld when there are no sales to divide
+  // by; "0.0%" would read as "advertising is free", not "unknown". Also withheld
+  // when the sales side is materially incomplete — dividing a whole month of ad
+  // spend into two days of revenue is what produced Lockabox's 109.3%.
+  const blendedRatiosOk = adsAvailable && !salesIncomplete;
+  const tacos = blendedRatiosOk ? ratio(ppcSpend, totalMetrics.sales, 100) : null;
+  const prevTacos = blendedRatiosOk ? ratio(prevPpcSpend, totalPreviousMetrics.sales, 100) : null;
+
+  // Advertising reliance — PPC sales as a share of total sales. Same exposure
+  // to a half-reported sales series, same treatment.
+  const advertisingReliance = blendedRatiosOk ? ratio(ppcSales, totalMetrics.sales, 100) : null;
+  const prevAdvertisingReliance = blendedRatiosOk
+    ? ratio(prevPpcSales, totalPreviousMetrics.sales, 100)
+    : null;
 
   // Organic metrics - prefer direct computation
   const fallbackBuyBoxPercentage = directOrganicMetrics ? directOrganicMetrics.buyBoxPercentage
@@ -236,8 +294,13 @@ export const MetricsGrid = ({
 
   // Conversion is Σunits ÷ Σsessions for the whole period (never a mean of daily
   // rates, and never units ÷ page views — a session can hold several page views).
-  // It is withheld rather than printed when there are no sessions in the feed, or
-  // when the arithmetic comes out impossible.
+  //
+  // The denominator is now TOTAL sessions, the same one Amazon uses for the
+  // unit-session percentage plotted in the daily cells. It used to be
+  // browser_sessions, which excludes the mobile app: on the same July screen
+  // Cottam read 74.0% over cells of 21.7–41.3%, THEYE 75.6% over 20.4–35.2%,
+  // and Dragonfly's 231.5% was so far past possible that the implausibility
+  // guard was the only thing standing between it and the client.
   const conversionAvailable = !!scoped
     ? scoped.conversionRate != null && !scoped.conversionImplausible
     : true;
@@ -246,13 +309,13 @@ export const MetricsGrid = ({
     : scoped.conversionRate == null
       ? (scoped.hasSessions ? 'No sessions recorded in this period.' : 'Session data is not reported for this account.')
       : scoped.conversionImplausible
-        ? `Units (${Math.round(scoped.unitsOrdered).toLocaleString()}) exceed sessions (${Math.round(scoped.sessions || 0).toLocaleString()}), so this cannot be a conversion rate.`
+        ? `Units (${Math.round(scoped.conversionUnits ?? scoped.unitsOrdered).toLocaleString()}) exceed sessions (${Math.round(scoped.sessions || 0).toLocaleString()}), so this cannot be a conversion rate.`
         : null;
   const avgConversionRate = scoped ? (scoped.conversionRate ?? 0) : fallbackConversionRate;
   const avgPreviousConversionRate = scopedPrev
     ? (scopedPrev.conversionImplausible ? 0 : (scopedPrev.conversionRate ?? 0))
     : fallbackPreviousConversionRate;
-  const conversionDenominatorLabel = scoped?.hasSessions ? 'browser sessions' : 'sessions';
+  const conversionDenominatorLabel = 'sessions (all devices)';
 
 
   const showExtendedMetrics = focusedAccount !== null;
@@ -316,6 +379,41 @@ export const MetricsGrid = ({
     </div>
   ) : null;
 
+  // Say plainly what is missing, in the same place the numbers are read.
+  const completenessBanner =
+    completeness && completeness.headline ? (
+      <div
+        role="status"
+        className={`flex items-start gap-2 rounded-lg border px-4 py-3 text-sm ${
+          completeness.materiallyIncomplete
+            ? 'border-amber-400 bg-amber-50 text-amber-900'
+            : 'border-slate-300 bg-slate-50 text-slate-700'
+        }`}
+      >
+        <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+        <div>
+          <div className="font-medium">
+            {completeness.level === 'empty'
+              ? 'No sales data for this period'
+              : completeness.materiallyIncomplete
+                ? 'Incomplete period — these are not full-period figures'
+                : 'Some days are missing from this period'}
+          </div>
+          <div className="text-xs mt-0.5">{completeness.headline}</div>
+          {describeMissingDates(completeness) && (
+            <div className="text-xs mt-0.5">{describeMissingDates(completeness)}</div>
+          )}
+          {completeness.materiallyIncomplete && (
+            <div className="text-xs mt-1">
+              The period-on-period comparison and any ratio of advertising to sales are withheld:
+              advertising is reported in full, so dividing it by part of a month of sales gives a
+              number that means nothing.
+            </div>
+          )}
+        </div>
+      </div>
+    ) : null;
+
   if (showExtendedMetrics) {
     // VENDOR-SPECIFIC KPI LAYOUT
     if (isVendor) {
@@ -330,6 +428,7 @@ export const MetricsGrid = ({
       return (
         <div className="space-y-4">
           {scopeErrorBanner}
+          {completenessBanner}
           {/* Vendor Financial Metrics */}
           <div>
             <h3 className="text-base md:text-lg font-semibold text-foreground mb-3 md:mb-4 flex items-center">
@@ -342,7 +441,7 @@ export const MetricsGrid = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-6">
               <MetricsCard
                 title="Ordered Revenue"
-                value={formatCurrencyForMetrics(vendorSales)}
+                value={orgMoney(vendorSales)}
                 color="text-blue-600"
                 currentValue={vendorSales}
                 previousValue={scopedPrev ? scopedPrev.sales : (prevVendorSales || totalPreviousMetrics.sales)}
@@ -351,11 +450,13 @@ export const MetricsGrid = ({
                 isSelected={selectedChartMetrics?.includes('sales')}
                 sparklineData={vendorSalesSpark}
                 seriesSemantics={scopedSeries ? 'sum' : undefined}
+                comparisonSuppressedReason={incompleteNote}
+                qualifier={partialQualifier}
               />
 
               <MetricsCard
                 title="Units Ordered"
-                value={vendorUnits.toLocaleString()}
+                value={orgCount(vendorUnits)}
                 color="text-indigo-600"
                 currentValue={vendorUnits}
                 previousValue={scopedPrev ? scopedPrev.unitsOrdered : (prevVendorOrders || totalPreviousMetrics.unitsOrdered)}
@@ -364,6 +465,8 @@ export const MetricsGrid = ({
                 isSelected={selectedChartMetrics?.includes('unitsSold')}
                 sparklineData={vendorUnitsSpark}
                 seriesSemantics={scopedSeries ? 'sum' : undefined}
+                comparisonSuppressedReason={incompleteNote}
+                qualifier={partialQualifier}
               />
             </div>
           </div>
@@ -434,6 +537,7 @@ export const MetricsGrid = ({
     return (
       <div className="space-y-4">
         {scopeErrorBanner}
+        {completenessBanner}
         {/* Primary Financial Metrics */}
         <div>
           <h3 className="text-base md:text-lg font-semibold text-gray-900 mb-3 md:mb-4 flex items-center">
@@ -446,7 +550,7 @@ export const MetricsGrid = ({
               title="Overall Sales"
               subtitle="Gross ordered product sales"
               info="Gross ordered product sales (organic + PPC) from Amazon's sales report. This will NOT match the P&L tab's 'Sales (revenue)', which is net sales from SP-API Seller Economics on an accrual basis — they come from different Amazon reports and different windows, so they won't tie out exactly."
-              value={formatCurrencyForMetrics(totalMetrics.sales)}
+              value={orgMoney(totalMetrics.sales)}
               color="text-blue-600"
               currentValue={totalMetrics.sales}
               previousValue={totalPreviousMetrics.sales}
@@ -455,13 +559,15 @@ export const MetricsGrid = ({
               isSelected={selectedChartMetrics?.includes('sales')}
               sparklineData={scopedSeries?.sales ?? sparklines.sales}
               seriesSemantics={scopedSeries ? 'sum' : undefined}
+              comparisonSuppressedReason={incompleteNote}
+              qualifier={partialQualifier}
             />
 
             <MetricsCard
               title="PPC Spend"
               info="Total advertising spend in the period. Cost metric — a rising delta is bad and turns red."
               invertSentiment
-              value={formatCurrencyForMetrics(ppcSpend)}
+              value={adsMoney(ppcSpend)}
               color="text-orange-600"
               currentValue={ppcSpend}
               previousValue={prevPpcSpend}
@@ -474,7 +580,7 @@ export const MetricsGrid = ({
             <MetricsCard
               title="PPC Sales"
               info="Sales attributed to advertising (typically 7-day attribution). Higher is better."
-              value={formatCurrencyForMetrics(ppcSales)}
+              value={adsMoney(ppcSales)}
               color="text-indigo-600"
               currentValue={ppcSales}
               previousValue={prevPpcSales}
@@ -487,7 +593,7 @@ export const MetricsGrid = ({
             <MetricsCard
               title="Overall Units"
               info="Units ordered across all orders in the period (organic + PPC)."
-              value={totalMetrics.unitsOrdered.toLocaleString()}
+              value={orgCount(totalMetrics.unitsOrdered)}
               color="text-indigo-600"
               currentValue={totalMetrics.unitsOrdered}
               previousValue={totalPreviousMetrics.unitsOrdered}
@@ -496,6 +602,8 @@ export const MetricsGrid = ({
               isSelected={selectedChartMetrics?.includes('unitsSold')}
               sparklineData={scopedSeries?.units ?? sparklines.orders}
               seriesSemantics={scopedSeries ? 'sum' : undefined}
+              comparisonSuppressedReason={incompleteNote}
+              qualifier={partialQualifier}
             />
 
           </div>
@@ -546,26 +654,28 @@ export const MetricsGrid = ({
               isPercentage={true}
               onClick={onToggleChartMetric ? () => onToggleChartMetric('tacos') : undefined}
               isSelected={selectedChartMetrics?.includes('tacos')}
+              comparisonSuppressedReason={incompleteNote}
             />
 
             <MetricsCard
               title="Advertising %"
               info="PPC sales as a share of total sales. Cost-sentiment metric — a heavy reliance on ads turns red."
               invertSentiment
-              value={formatPercentage(advertisingReliance)}
+              value={ratePct(advertisingReliance)}
               color="text-amber-600"
-              currentValue={advertisingReliance}
-              previousValue={prevAdvertisingReliance}
+              currentValue={rateDelta(advertisingReliance)}
+              previousValue={rateDelta(prevAdvertisingReliance)}
               comparisonLabel={comparisonLabel}
               isPercentage={true}
               onClick={onToggleChartMetric ? () => onToggleChartMetric('advertisingReliance') : undefined}
               isSelected={selectedChartMetrics?.includes('advertisingReliance')}
+              comparisonSuppressedReason={incompleteNote}
             />
 
 
             <MetricsCard
               title="PPC Impressions"
-              value={ppcImpressions.toLocaleString()}
+              value={adsCount(ppcImpressions)}
               color="text-blue-600"
               currentValue={ppcImpressions}
               previousValue={prevPpcImpressions}
@@ -580,7 +690,7 @@ export const MetricsGrid = ({
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-6">
             <MetricsCard
               title="PPC Clicks"
-              value={ppcClicks.toLocaleString()}
+              value={adsCount(ppcClicks)}
               color="text-violet-600"
               currentValue={ppcClicks}
               previousValue={prevPpcClicks}
@@ -641,7 +751,7 @@ export const MetricsGrid = ({
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-6">
               <MetricsCard
                 title="Page Views"
-                value={totalMetrics.pageViews.toLocaleString()}
+                value={orgCount(totalMetrics.pageViews)}
                 color="text-pink-600"
                 currentValue={totalMetrics.pageViews}
                 previousValue={totalPreviousMetrics.pageViews}
@@ -650,11 +760,14 @@ export const MetricsGrid = ({
                 isSelected={selectedChartMetrics?.includes('pageViews')}
                 sparklineData={scopedSeries?.pageViews}
                 seriesSemantics={scopedSeries ? 'sum' : undefined}
+                subtitle={scoped?.hasSessions ? 'Browser page views' : undefined}
+                comparisonSuppressedReason={incompleteNote}
+                qualifier={partialQualifier}
               />
 
               <MetricsCard
                 title="Buy Box %"
-                value={formatPercentage(avgBuyBoxPercentage)}
+                value={orgPct(avgBuyBoxPercentage)}
                 color="text-yellow-600"
                 currentValue={avgBuyBoxPercentage}
                 previousValue={avgPreviousBuyBoxPercentage}
@@ -662,6 +775,7 @@ export const MetricsGrid = ({
                 isPercentage={true}
                 onClick={onToggleChartMetric ? () => onToggleChartMetric('buyBoxPercentage') : undefined}
                 isSelected={selectedChartMetrics?.includes('buyBoxPercentage')}
+                comparisonSuppressedReason={incompleteNote}
               />
 
               <MetricsCard
@@ -670,11 +784,11 @@ export const MetricsGrid = ({
                 subtitle={
                   conversionAvailable
                     ? (scoped?.sessions != null
-                        ? `${Math.round(scoped.unitsOrdered).toLocaleString()} units ÷ ${Math.round(scoped.sessions).toLocaleString()} ${conversionDenominatorLabel}`
+                        ? `${Math.round(scoped.conversionUnits ?? scoped.unitsOrdered).toLocaleString()} units ÷ ${Math.round(scoped.sessions).toLocaleString()} ${conversionDenominatorLabel}`
                         : undefined)
                     : conversionUnavailableReason
                 }
-                value={conversionAvailable ? formatPercentage(avgConversionRate) : '—'}
+                value={conversionAvailable && !scopedEmpty ? formatPercentage(avgConversionRate) : '—'}
                 // Neutral hue: the headline must not carry good/bad — that is the
                 // delta badge's job (fix/deltas), and red read as "bad conversion".
                 color={conversionAvailable ? 'text-fuchsia-600' : 'text-muted-foreground'}
@@ -684,6 +798,7 @@ export const MetricsGrid = ({
                 isPercentage={true}
                 onClick={onToggleChartMetric ? () => onToggleChartMetric('conversionRate') : undefined}
                 isSelected={selectedChartMetrics?.includes('conversionRate')}
+                comparisonSuppressedReason={incompleteNote}
               />
             </div>
           </div>

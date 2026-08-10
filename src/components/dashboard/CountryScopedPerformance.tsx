@@ -15,6 +15,8 @@ import { getCountryName } from '@/utils/countryUtils';
 import { getAmazonProductUrl } from '@/utils/amazonUtils';
 import { getCurrentDateRange, getPreviousDateRange } from '@/utils/dataProcessor';
 import { buildComparisonLabel } from '@/utils/comparisonLabels';
+import { describeMissingDates } from '@/utils/kpiIntegrity';
+import { AlertTriangle } from 'lucide-react';
 import type { DateFilter } from '@/types/dashboard';
 
 interface Props {
@@ -61,7 +63,18 @@ export function CountryScopedPerformance({
 
   // Single scoped source, shared with the KPI grid so the two cannot disagree.
   const scopedMetrics = useScopedMetrics(spid, scope, dateFilter, customDateRange);
-  const { totals, previousTotals, series, days, loading, error: scopeError } = scopedMetrics;
+  const { totals, previousTotals, series, days, completeness, loading, error: scopeError } = scopedMetrics;
+
+  // See MetricsGrid: a period the feed only half covers is not a period. The
+  // total is qualified, the comparison and any ads-over-sales ratio withheld.
+  const salesIncomplete = completeness.materiallyIncomplete;
+  const incompleteNote = salesIncomplete
+    ? `Withheld — only ${completeness.presentDays} of ${completeness.expectedDays} days of sales data`
+    : undefined;
+  const scopedEmpty = completeness.level === 'empty';
+  const partialQualifier = salesIncomplete && !scopedEmpty
+    ? `Partial period — ${completeness.presentDays} of ${completeness.expectedDays} days`
+    : undefined;
 
   const cur = getCurrencyInfo(scope);
   const isRollup = isRollupScope(scope);
@@ -116,8 +129,10 @@ export function CountryScopedPerformance({
   const pageViewsSpark = series.pageViews;
   const sessionsSpark = series.sessions;
   const buyBoxSpark = series.buyBox;
-  // Per-day conversion from the same two series the totals use: units ÷ sessions.
-  // Never units ÷ page views, and never a stored per-row rate.
+  // Per-day conversion from the same two series the total is built from: units
+  // ÷ sessions, where sessions is Amazon's own total-session denominator. The
+  // headline is the session-weighted blend of exactly these cells, so it can no
+  // longer sit above every one of them.
   const conversionSpark = unitsSpark.map((u, i) => {
     const s = sessionsSpark[i] || 0;
     if (s <= 0) return 0;
@@ -182,6 +197,32 @@ export function CountryScopedPerformance({
 
   return (
     <>
+      {completeness.headline && (
+        <div
+          role="status"
+          className={`flex items-start gap-2 rounded-lg border px-4 py-3 text-sm ${
+            completeness.materiallyIncomplete
+              ? 'border-amber-400 bg-amber-50 text-amber-900'
+              : 'border-slate-300 bg-slate-50 text-slate-700'
+          }`}
+        >
+          <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+          <div>
+            <div className="font-medium">
+              {completeness.level === 'empty'
+                ? `No sales data for ${scopeLabel(scope)} in this period`
+                : completeness.materiallyIncomplete
+                  ? 'Incomplete period — these are not full-period figures'
+                  : 'Some days are missing from this period'}
+            </div>
+            <div className="text-xs mt-0.5">{completeness.headline}</div>
+            {describeMissingDates(completeness) && (
+              <div className="text-xs mt-0.5">{describeMissingDates(completeness)}</div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Daily Performance heatmap (Sales + Units only) */}
       <section>
         <div className="mb-3 md:mb-4">
@@ -219,8 +260,8 @@ export function CountryScopedPerformance({
                     {[
                       { label: 'Sales', spark: salesSpark, max: maxSales, base: '#2563EB', fmt: fmtMoney },
                       { label: 'Units', spark: unitsSpark, max: maxUnits, base: '#10B981', fmt: fmtNum },
-                      { label: 'Page Views', spark: pageViewsSpark, max: maxPageViews, base: '#2563EB', fmt: fmtNum },
-                      ...(totals?.hasSessions ? [{ label: 'Sessions', spark: sessionsSpark, max: Math.max(1, ...sessionsSpark), base: '#2563EB', fmt: fmtNum }] : []),
+                      { label: totals?.hasSessions ? 'Page views (browser)' : 'Glance views', spark: pageViewsSpark, max: maxPageViews, base: '#2563EB', fmt: fmtNum },
+                      ...(totals?.hasSessions ? [{ label: 'Sessions (all devices)', spark: sessionsSpark, max: Math.max(1, ...sessionsSpark), base: '#2563EB', fmt: fmtNum }] : []),
                       { label: 'Buy Box %', spark: buyBoxSpark, max: maxBuyBox, base: '#10B981', fmt: fmtPct },
                       // Blank for vendors and for any day where units exceed sessions.
                       ...(totals?.hasSessions ? [{ label: 'Conversion %', spark: conversionSpark, max: maxConversion, base: '#10B981', fmt: fmtPct }] : []),
@@ -262,60 +303,69 @@ export function CountryScopedPerformance({
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
             <MetricsCard
               title="Overall Sales"
-              value={fmtMoney(totalSales)}
+              value={scopedEmpty ? '—' : fmtMoney(totalSales)}
               color="text-blue-600"
               currentValue={totalSales}
               previousValue={prevSales}
               comparisonLabel={comparison}
               sparklineData={salesSpark}
               seriesSemantics="sum"
+              comparisonSuppressedReason={incompleteNote}
+              qualifier={partialQualifier}
             />
             <MetricsCard
               title="Units Ordered"
-              value={fmtNum(totalUnits)}
+              value={scopedEmpty ? '—' : fmtNum(totalUnits)}
               color="text-indigo-600"
               currentValue={totalUnits}
               previousValue={prevUnits}
               comparisonLabel={comparison}
               sparklineData={unitsSpark}
               seriesSemantics="sum"
+              comparisonSuppressedReason={incompleteNote}
+              qualifier={partialQualifier}
             />
             <MetricsCard
               title="Page Views"
-              value={fmtNum(totalPageViews)}
+              value={scopedEmpty ? '—' : fmtNum(totalPageViews)}
               color="text-blue-600"
               currentValue={totalPageViews}
               previousValue={prevPageViews}
               comparisonLabel={comparison}
               sparklineData={pageViewsSpark}
               seriesSemantics="sum"
+              subtitle={totals?.hasSessions ? 'Browser page views' : undefined}
+              comparisonSuppressedReason={incompleteNote}
+              qualifier={partialQualifier}
             />
             <MetricsCard
               title="Buy Box %"
-              value={fmtPct(avgBuyBox)}
+              value={scopedEmpty ? '—' : fmtPct(avgBuyBox)}
               color="text-violet-600"
               currentValue={avgBuyBox}
               previousValue={prevAvgBuyBox}
               comparisonLabel={comparison}
               sparklineData={buyBoxSpark}
+              comparisonSuppressedReason={incompleteNote}
             />
             <MetricsCard
               title="Conversion %"
-              info={`Units ordered ÷ ${totals?.hasSessions ? 'browser sessions' : 'sessions'} across the whole period. Page views are not sessions.`}
+              info="Units ordered ÷ sessions (all devices) across the whole period — the same denominator as the daily Conversion % cells above. Page views are not sessions, and the page-view row is browser only."
               subtitle={
                 conversionAvailable
-                  ? `${fmtNum(totalUnits)} units ÷ ${fmtNum(totals?.sessions || 0)} sessions`
+                  ? `${fmtNum(totals?.conversionUnits ?? totalUnits)} units ÷ ${fmtNum(totals?.sessions || 0)} sessions (all devices)`
                   : totals?.hasSessions
-                    ? `Units (${fmtNum(totalUnits)}) exceed sessions (${fmtNum(totals?.sessions || 0)}) — withheld`
+                    ? `Units (${fmtNum(totals?.conversionUnits ?? totalUnits)}) exceed sessions (${fmtNum(totals?.sessions || 0)}) — withheld`
                     : 'Sessions are not reported for this account'
               }
-              value={conversionAvailable ? fmtPct(avgConversion) : '—'}
+              value={conversionAvailable && !scopedEmpty ? fmtPct(avgConversion) : '—'}
               // Neutral hue, per fix/deltas: the headline no longer carries valence.
               color={conversionAvailable ? 'text-fuchsia-600' : 'text-muted-foreground'}
               currentValue={conversionAvailable ? avgConversion : 0}
               previousValue={conversionAvailable ? prevAvgConversion : 0}
               comparisonLabel={comparison}
               sparklineData={conversionAvailable ? conversionSpark : undefined}
+              comparisonSuppressedReason={incompleteNote}
             />
           </div>
         )}

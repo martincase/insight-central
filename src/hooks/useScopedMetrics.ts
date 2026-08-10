@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { format, eachDayOfInterval } from 'date-fns';
 import { supabase } from '@/integrations/supabase/client';
 import { getCurrentDateRange, getPreviousDateRange } from '@/utils/dataProcessor';
+import { assessCompleteness, COMPLETENESS_UNKNOWN, type DataCompleteness } from '@/utils/kpiIntegrity';
 import type { DateFilter } from '@/types/dashboard';
 
 /**
@@ -14,7 +15,10 @@ import type { DateFilter } from '@/types/dashboard';
  * home market under whatever label the switcher is showing.
  *
  * The daily rows are returned alongside the totals deliberately: the KPI cards
- * assert their total against this exact series (see utils/kpiIntegrity).
+ * assert their total against this exact series (see utils/kpiIntegrity). For
+ * that assertion to mean anything, the total and the series must be built on
+ * the same basis — same currency decision, same rows — which is why every
+ * derivation below is made once, here, and shared.
  */
 
 export interface ScopedDailyRow {
@@ -23,15 +27,17 @@ export interface ScopedDailyRow {
   sales_native: number | null;
   sales_gbp: number | null;
   page_views: number | null;
+  /** Total sessions (all devices), recovered from Amazon's unit_session_percentage. */
   sessions: number | null;
   buy_box_pct: number | null;
   conversion: number | null;
   has_sessions: boolean;
+  /** null when the DAY itself spans more than one currency. */
   currency: string | null;
 }
 
 export interface ScopedTotals {
-  /** Native currency total for a single-country scope, GBP for a rollup. */
+  /** Native currency total for a single-currency scope, GBP for anything else. */
   sales: number;
   salesGbp: number;
   /** null means the scope spans currencies, so the figure above is GBP. */
@@ -44,6 +50,8 @@ export interface ScopedTotals {
   buyBoxPercentage: number | null;
   /** Σunits ÷ Σsessions × 100. Never an average of per-row conversion rates. */
   conversionRate: number | null;
+  /** Units counted in the conversion numerator — only days with a denominator. */
+  conversionUnits: number | null;
   /** True when conversion came out above 100% — real data, but not printable. */
   conversionImplausible: boolean;
 }
@@ -62,6 +70,8 @@ export interface UseScopedMetricsResult {
   previousTotals: ScopedTotals | null;
   series: ScopedSeries;
   days: Date[];
+  /** How much of the selected window the sales series actually covers. */
+  completeness: DataCompleteness;
   loading: boolean;
   error: string | null;
 }
@@ -70,27 +80,54 @@ const EMPTY_SERIES: ScopedSeries = { sales: [], units: [], pageViews: [], sessio
 
 const num = (v: unknown) => Number(v) || 0;
 
-/** Sales are native when the whole scope shares one currency, GBP otherwise. */
-const rowSales = (r: ScopedDailyRow) => (r.currency ? num(r.sales_native) : num(r.sales_gbp));
+/**
+ * Is the whole scope denominated in one currency?
+ *
+ * This has to be all-or-nothing across every row. It used to ignore rows whose
+ * currency was null — but null is precisely the RPC's way of saying "this day
+ * mixed marketplaces". Portwest "All seller markets" is Workwear Depot UK plus
+ * Workwear Depot US: the US feed died on 2 July, so 29 of July's 31 days were
+ * GB-only and carried currency 'GBP'. The old test saw one distinct currency,
+ * declared the scope sterling, and summed sales_native — adding raw dollars to
+ * pounds. £27,196.93 against the £27,010.75 the same page showed elsewhere, and
+ * the sum-check fired on a 0.68% "drift" that was the bug, not a rounding
+ * artefact. The 14-day whole-business view was 13.65% out the same way.
+ */
+const isSingleCurrency = (rows: ScopedDailyRow[]): boolean => {
+  if (!rows.length) return false;
+  if (rows.some((r) => !r.currency)) return false;
+  return new Set(rows.map((r) => r.currency)).size === 1;
+};
 
 function summarise(rows: ScopedDailyRow[]): ScopedTotals | null {
   if (!rows.length) return null;
 
-  const currencies = new Set(rows.map((r) => r.currency).filter(Boolean) as string[]);
-  const currency = currencies.size === 1 ? [...currencies][0] : null;
+  const single = isSingleCurrency(rows);
+  const currency = single ? (rows[0].currency as string) : null;
 
   const unitsOrdered = rows.reduce((s, r) => s + num(r.units), 0);
   const pageViews = rows.reduce((s, r) => s + num(r.page_views), 0);
   const salesGbp = rows.reduce((s, r) => s + num(r.sales_gbp), 0);
-  const sales = currency ? rows.reduce((s, r) => s + num(r.sales_native), 0) : salesGbp;
+  const sales = single ? rows.reduce((s, r) => s + num(r.sales_native), 0) : salesGbp;
 
-  // A day with no sessions column at all (vendor) must not be read as zero
-  // sessions — that would make conversion look infinite rather than unknown.
-  const hasSessions = rows.some((r) => r.has_sessions && r.sessions != null);
-  const sessions = hasSessions ? rows.reduce((s, r) => s + num(r.sessions), 0) : null;
+  // Conversion is rebuilt from the per-day rate the RPC computed, weighted by
+  // that day's sessions. Algebraically that is Σunits ÷ Σsessions over exactly
+  // the rows that HAVE a session denominator — which is not the same as the
+  // day's total units when a scope mixes a seller arm (sessions) with a vendor
+  // arm (none). S Green & Sons is that case: dividing the combined unit count
+  // by the seller-only session count put the headline at 6.4% above a daily
+  // range of 3.2–5.1%. Weighted properly it is 4.08%, inside its own cells.
+  const convRows = rows.filter(
+    (r) => r.has_sessions && r.sessions != null && num(r.sessions) > 0 && r.conversion != null,
+  );
+  const hasSessions = convRows.length > 0;
+  const sessions = hasSessions ? convRows.reduce((s, r) => s + num(r.sessions), 0) : null;
+  const conversionUnits = hasSessions
+    ? convRows.reduce((s, r) => s + (num(r.conversion) / 100) * num(r.sessions), 0)
+    : null;
 
-  // House rule: conversion = Σunits ÷ Σsessions, never a mean of daily rates.
-  const rawConversion = sessions && sessions > 0 ? (unitsOrdered / sessions) * 100 : null;
+  const rawConversion =
+    sessions && sessions > 0 && conversionUnits != null ? (conversionUnits / sessions) * 100 : null;
   const conversionImplausible = rawConversion != null && rawConversion > 100;
 
   // Buy box is a percentage, so weight it by traffic rather than by day.
@@ -112,6 +149,7 @@ function summarise(rows: ScopedDailyRow[]): ScopedTotals | null {
     hasSessions,
     buyBoxPercentage,
     conversionRate: rawConversion,
+    conversionUnits,
     conversionImplausible,
   };
 }
@@ -188,8 +226,14 @@ export function useScopedMetrics(
     return m;
   }, [daily]);
 
+  // The currency decision is made ONCE, for the whole scope, and both the
+  // headline total and the daily series obey it. Deciding per row is what put
+  // native pounds-and-dollars in the total and GBP in the series.
+  const single = useMemo(() => isSingleCurrency(daily), [daily]);
+
   const series = useMemo<ScopedSeries>(() => {
     if (!daily.length) return EMPTY_SERIES;
+    const rowSales = (r: ScopedDailyRow) => (single ? num(r.sales_native) : num(r.sales_gbp));
     const pick = <T,>(fn: (r: ScopedDailyRow) => T, fallback: T) =>
       days.map((d) => {
         const r = byDay.get(format(d, 'yyyy-MM-dd'));
@@ -202,10 +246,18 @@ export function useScopedMetrics(
       sessions: pick((r) => num(r.sessions), 0),
       buyBox: pick((r) => num(r.buy_box_pct), 0),
     };
-  }, [daily, days, byDay]);
+  }, [daily, days, byDay, single]);
 
   const totals = useMemo(() => summarise(daily), [daily]);
   const previousTotals = useMemo(() => summarise(prev), [prev]);
 
-  return { daily, totals, previousTotals, series, days, loading, error };
+  // A day is "present" when the feed produced a row for it. Loading states must
+  // not read as a gap, so completeness is unknown until the fetch settles.
+  const completeness = useMemo<DataCompleteness>(() => {
+    if (loading || error) return COMPLETENESS_UNKNOWN;
+    if (!spid || !scope) return COMPLETENESS_UNKNOWN;
+    return assessCompleteness(days, byDay.keys());
+  }, [loading, error, spid, scope, days, byDay]);
+
+  return { daily, totals, previousTotals, series, days, completeness, loading, error };
 }

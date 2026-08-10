@@ -1113,6 +1113,17 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
               merchantToken={account.merchantToken}
               accountName={account.name}
               hideConfigButton={true}
+              dataIssue={
+                scopedMetrics.completeness.materiallyIncomplete
+                  ? {
+                      title:
+                        scopedMetrics.completeness.level === 'empty'
+                          ? 'No sales data for this period'
+                          : 'Incomplete sales data for this period',
+                      detail: scopedMetrics.completeness.headline,
+                    }
+                  : null
+              }
             />
 
             {brandCountries.spid && (

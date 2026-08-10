@@ -53,14 +53,26 @@ interface InventorySkuRow {
   total: number;
 }
 
+/**
+ * One row per country, and — crucially — ONE definition of ad spend per row.
+ *
+ * rpc_ppc_summary used to hand back two: the financials' ads_spend in the
+ * ad_spend_gbp column that the table printed and the card summed, and the ads
+ * feed's own spend buried inside the per-row ACOS. Portwest therefore read
+ * "Blended ACOS 5.4%" above a country row of 17.9% on what the client was told
+ * was the same money. ad_sales was never converted to GBP either, so the card
+ * divided a sterling numerator by a native-currency denominator.
+ */
 interface PpcRow {
   country_code: string;
   marketplace_id: string;
-  ad_spend_gbp: number;
-  sales_gbp: number;
-  tacos: number;
-  ad_sales: number;
-  acos: number;
+  currency: string;
+  ad_spend_gbp: number | null;
+  /** 'ads_feed' where the campaign feed covers the country, else 'financials'. */
+  ad_spend_source: string;
+  /** null — not zero — where no advertised sales are synced. */
+  ad_sales_gbp: number | null;
+  net_sales_gbp: number | null;
   has_ads_perf: boolean;
 }
 
@@ -390,12 +402,48 @@ export function MultiCountryPanel({ spid, scope, dateFilter, customDateRange }: 
       {(() => {
         const totalSpend = ppc.reduce((s, r) => s + Number(r.ad_spend_gbp || 0), 0);
         if (totalSpend <= 0) return null;
-        const totalSales = ppc.reduce((s, r) => s + Number(r.sales_gbp || 0), 0);
-        const blendedTacos = totalSales > 0 ? totalSpend / totalSales : 0;
-        const perfSpend = ppc.filter((r) => r.has_ads_perf).reduce((s, r) => s + Number(r.ad_spend_gbp || 0), 0);
-        const perfAdSales = ppc.reduce((s, r) => s + Number(r.ad_sales || 0), 0);
-        const blendedAcos = perfAdSales > 0 ? perfSpend / perfAdSales : 0;
+
+        // TACOS divides by the sales this panel is already showing. It used to
+        // divide by fin_seller_economics.net_product_sales, which is a different
+        // and usually much smaller figure — S Green & Sons: £161,708 of net
+        // sales against the £293,014 on the Sales card two boxes to the left,
+        // so TACOS printed 16.1% where the page's own numbers give 8.9%. Ooble
+        // showed 15.5% against a true 5.0% the same way.
+        const salesByCountry = new Map<string, number>();
+        for (const r of sales) {
+          salesByCountry.set(
+            r.country_code,
+            (salesByCountry.get(r.country_code) || 0) + Number(r.sales_gbp || 0),
+          );
+        }
+        // A real but tiny ratio must not round to a flat "0.0%", which reads as
+        // "no advertising" rather than "barely any".
+        const pct = (v: number | null) => {
+          if (v == null) return '—';
+          const p = v * 100;
+          if (p > 0 && p < 0.05) return '<0.1%';
+          return `${p.toFixed(1)}%`;
+        };
+        const rowTacos = (r: PpcRow) => {
+          const s = salesByCountry.get(r.country_code) || 0;
+          return s > 0 ? Number(r.ad_spend_gbp || 0) / s : null;
+        };
+        const rowAcos = (r: PpcRow) => {
+          const adSales = Number(r.ad_sales_gbp || 0);
+          return r.has_ads_perf && adSales > 0 ? Number(r.ad_spend_gbp || 0) / adSales : null;
+        };
+
+        // The card is the column total of the table beneath it. Both ratios are
+        // rebuilt from the same two sums, over the same rows, so no reading on
+        // this card can contradict a reading in that table.
+        const blendedTacos = totalGbp > 0 ? totalSpend / totalGbp : null;
+        const perfRows = ppc.filter((r) => r.has_ads_perf && Number(r.ad_sales_gbp || 0) > 0);
+        const perfSpend = perfRows.reduce((s, r) => s + Number(r.ad_spend_gbp || 0), 0);
+        const perfAdSales = perfRows.reduce((s, r) => s + Number(r.ad_sales_gbp || 0), 0);
+        const blendedAcos = perfAdSales > 0 ? perfSpend / perfAdSales : null;
         const anyMissing = ppc.some((r) => !r.has_ads_perf);
+        const anyFromFinancials = ppc.some((r) => r.ad_spend_source !== 'ads_feed');
+        const partialAcosBase = perfRows.length > 0 && perfRows.length < ppc.length;
         return (
           <Card>
             <CardHeader className="pb-2">
@@ -411,15 +459,19 @@ export function MultiCountryPanel({ spid, scope, dateFilter, customDateRange }: 
                 </div>
                 <div className="rounded-md border p-3">
                   <div className="text-xs text-muted-foreground">Blended TACOS</div>
-                  <div className="text-lg md:text-2xl font-bold mt-1">{(blendedTacos * 100).toFixed(1)}%</div>
-                  <div className="text-[10px] text-muted-foreground mt-0.5">Ad spend ÷ total sales</div>
+                  <div className="text-lg md:text-2xl font-bold mt-1">{pct(blendedTacos)}</div>
+                  <div className="text-[10px] text-muted-foreground mt-0.5">
+                    {fmtGbp(totalSpend)} ÷ {fmtGbp(totalGbp)} total sales
+                  </div>
                 </div>
                 <div className="rounded-md border p-3">
                   <div className="text-xs text-muted-foreground">Blended ACOS</div>
-                  <div className="text-lg md:text-2xl font-bold mt-1">
-                    {perfAdSales > 0 ? `${(blendedAcos * 100).toFixed(1)}%` : '—'}
+                  <div className="text-lg md:text-2xl font-bold mt-1">{pct(blendedAcos)}</div>
+                  <div className="text-[10px] text-muted-foreground mt-0.5">
+                    {blendedAcos == null
+                      ? 'No advertised sales synced'
+                      : `${fmtGbp(perfSpend)} ÷ ${fmtGbp(perfAdSales)} ad sales`}
                   </div>
-                  <div className="text-[10px] text-muted-foreground mt-0.5">Ad spend ÷ ad sales (where synced)</div>
                 </div>
               </div>
 
@@ -448,24 +500,47 @@ export function MultiCountryPanel({ spid, scope, dateFilter, customDateRange }: 
                             </span>
                           </TableCell>
                           <TableCell className="text-right tabular-nums">{fmtGbp(Number(r.ad_spend_gbp || 0))}</TableCell>
-                          <TableCell className="text-right tabular-nums">{(Number(r.tacos || 0) * 100).toFixed(1)}%</TableCell>
+                          <TableCell className="text-right tabular-nums">{pct(rowTacos(r))}</TableCell>
                           <TableCell className="text-right tabular-nums">
-                            {r.has_ads_perf ? fmtGbp(Number(r.ad_sales || 0)) : '—'}
+                            {r.has_ads_perf ? fmtGbp(Number(r.ad_sales_gbp || 0)) : '—'}
                           </TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {r.has_ads_perf ? `${(Number(r.acos || 0) * 100).toFixed(1)}%` : '—'}
-                          </TableCell>
+                          <TableCell className="text-right tabular-nums">{pct(rowAcos(r))}</TableCell>
                         </TableRow>
                       );
                     })}
+                  {/* The card above is literally this row. */}
+                  <TableRow className="font-semibold bg-muted/40">
+                    <TableCell>Total</TableCell>
+                    <TableCell className="text-right tabular-nums">{fmtGbp(totalSpend)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{pct(blendedTacos)}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {perfAdSales > 0 ? fmtGbp(perfAdSales) : '—'}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{pct(blendedAcos)}</TableCell>
+                  </TableRow>
                 </TableBody>
               </Table>
 
-              {anyMissing && (
+              <div className="space-y-1">
                 <p className="text-[11px] text-muted-foreground">
-                  ACOS needs advertised-sales data, which is currently only synced for the UK. Other marketplaces show ad spend and TACOS (ad spend ÷ total sales) from the financial feed.
+                  TACOS is ad spend ÷ that country's sales from the table above; the Total row divides
+                  total ad spend by the {fmtGbp(totalGbp)} on the Sales card. ACOS is ad spend ÷ ad sales,
+                  both taken from the advertising feed and converted at the same rate.
                 </p>
-              )}
+                {anyMissing && (
+                  <p className="text-[11px] text-muted-foreground">
+                    ACOS needs advertised-sales data, which is not synced for every marketplace. Where it
+                    is missing the row shows '—' rather than a zero.
+                    {partialAcosBase && ' The blended ACOS covers only the marketplaces that have it.'}
+                  </p>
+                )}
+                {anyFromFinancials && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Where the advertising feed does not cover a marketplace, ad spend comes from the
+                    financial feed instead, so no ACOS is shown for it.
+                  </p>
+                )}
+              </div>
             </CardContent>
           </Card>
         );
