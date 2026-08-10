@@ -32,12 +32,16 @@ interface PnlRow {
   sales_native: number;
   fees_native: number;
   ads_native: number;
+  /** Amazon's "taxes on fees" (VAT/GST on its selling fees) — the balance
+   *  between net sales and Amazon's own net-proceeds figure. */
+  tax_native: number;
   net_proceeds_native: number;
   cogs_native: number;
   profit_native: number;
   sales_gbp: number;
   fees_gbp: number;
   ads_gbp: number;
+  tax_gbp: number;
   net_proceeds_gbp: number;
   cogs_gbp: number;
   profit_gbp: number;
@@ -59,6 +63,10 @@ const FEE_COLOR_MAP: Record<string, string> = {
   'Shipping chargeback': '#64748B',
 };
 const FEE_FALLBACK = ['#EC4899', '#F97316', '#22C55E', '#A855F7', '#EAB308', '#DC2626', '#0D9488'];
+
+/** Amazon's tax on its own fees. Derived from Amazon's net-proceeds figure, so it
+ *  has no drill-down of its own — it is shown but not clickable. */
+const TAX_CATEGORY = 'Tax on Amazon fees';
 
 function normalizeKey(s: string): string {
   return s
@@ -84,6 +92,17 @@ const fmtGbp = (v: number, digits = 0) =>
   new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP', minimumFractionDigits: digits, maximumFractionDigits: digits }).format(v || 0);
 const fmtInt = (v: number) => new Intl.NumberFormat('en-GB').format(Math.round(v || 0));
 const fmtPct = (v: number) => `${(v * 100).toFixed(1)}%`;
+
+/** Round the way Intl does with maximumFractionDigits: 0 (half away from zero). */
+const r0 = (v: number) => (v < 0 ? -Math.round(-v) : Math.round(v || 0));
+/**
+ * The tax-on-fees line is the balance between Amazon's net-proceeds figure and the
+ * lines above it, so derive the printed value from the *printed* figures. Otherwise
+ * four independently-rounded numbers can leave the column a pound out and the
+ * statement still looks like it does not add up.
+ */
+const balancingTax = (sales: number, fees: number, ads: number, netProceeds: number) =>
+  r0(sales) - r0(fees) - r0(ads) - r0(netProceeds);
 
 export function PnlDashboard({ spid, scope, dateFilter, customDateRange }: Props) {
   const [rows, setRows] = useState<PnlRow[]>([]);
@@ -144,6 +163,7 @@ export function PnlDashboard({ spid, scope, dateFilter, customDateRange }: Props
         sales: num(singleRow.sales_native),
         fees: Math.abs(num(singleRow.fees_native)),
         ads: Math.abs(num(singleRow.ads_native)),
+        tax: num(singleRow.tax_native),
         netProceeds: num(singleRow.net_proceeds_native),
         cogs: Math.abs(num(singleRow.cogs_native)),
         profit: num(singleRow.profit_native),
@@ -157,6 +177,7 @@ export function PnlDashboard({ spid, scope, dateFilter, customDateRange }: Props
       sales: sum('sales_gbp'),
       fees: Math.abs(sum('fees_gbp')),
       ads: Math.abs(sum('ads_gbp')),
+      tax: sum('tax_gbp'),
       netProceeds: sum('net_proceeds_gbp'),
       cogs: Math.abs(sum('cogs_gbp')),
       profit: sum('profit_gbp'),
@@ -168,6 +189,15 @@ export function PnlDashboard({ spid, scope, dateFilter, customDateRange }: Props
   const marginPct = totals.sales > 0 ? totals.profit / totals.sales : 0;
   const netProceedsMarginPct = totals.sales > 0 ? totals.netProceeds / totals.sales : 0;
   const cogsMissing = totals.cogs === 0;
+
+  // Amazon's net-proceeds figure is net of the tax it charges on its own fees
+  // ("taxes on fees" — 20% VAT in the UK). That was previously deducted without
+  // being shown, so Sales − Fees − Ads did not equal Net proceeds. It is now an
+  // explicit line: the statement resolves exactly.
+  const taxOnFees = balancingTax(totals.sales, totals.fees, totals.ads, totals.netProceeds);
+  // Only hidden when it rounds to zero at the displayed precision, so the
+  // visible column always adds up.
+  const showTaxLine = taxOnFees !== 0;
 
   // Cost breakdown — fee categories (share × fee total) + Advertising + COGS.
   // Currency matches the P&L statement: native for single country, GBP for rollup.
@@ -185,13 +215,16 @@ export function PnlDashboard({ spid, scope, dateFilter, customDateRange }: Props
     if (totals.ads > 0) {
       feeSlices.push({ category: 'Advertising', share: 1, amount: totals.ads, color: '#0EA5E9' });
     }
+    if (totals.tax > 0) {
+      feeSlices.push({ category: TAX_CATEGORY, share: 1, amount: totals.tax, color: '#475569' });
+    }
     if (totals.cogs > 0) {
       feeSlices.push({ category: 'COGS', share: 1, amount: totals.cogs, color: '#78716C' });
     }
     // Recompute share as fraction of the whole cost breakdown for display
     const grand = feeSlices.reduce((s, x) => s + (x.amount || 0), 0) || 1;
     return feeSlices.map((x) => ({ ...x, share: x.amount / grand }));
-  }, [fees, totals.fees, totals.ads, totals.cogs]);
+  }, [fees, totals.fees, totals.ads, totals.tax, totals.cogs]);
   const { ref: donutRef, chartKey: donutKey } = useChartReady(feeComposition.length);
   const hasCostData = feeComposition.some((f) => Number.isFinite(f.amount) && f.amount > 0.01);
 
@@ -260,6 +293,14 @@ export function PnlDashboard({ spid, scope, dateFilter, customDateRange }: Props
                   muted
                   onClick={() => openDetail({ kind: 'ads', name: 'Advertising', amount: totals.ads, color: '#0EA5E9' })}
                 />
+                {showTaxLine && (
+                  <PnlRowLine
+                    label={taxOnFees >= 0 ? '− Tax on Amazon fees' : '+ Tax on Amazon fees (credit)'}
+                    value={taxOnFees >= 0 ? `(${fmtMoney(taxOnFees)})` : fmtMoney(Math.abs(taxOnFees))}
+                    muted
+                    hint="VAT/GST Amazon charges on its own fees — 20% in the UK. Deducted before net proceeds."
+                  />
+                )}
                 <PnlRowLine
                   label="= Net proceeds"
                   value={fmtMoney(totals.netProceeds)}
@@ -346,6 +387,25 @@ export function PnlDashboard({ spid, scope, dateFilter, customDateRange }: Props
                 })()}
                 <div className="w-full space-y-1.5">
                   {feeComposition.map((f) => {
+                    if (f.category === TAX_CATEGORY) {
+                      // Derived from Amazon's net proceeds — no transaction-level
+                      // detail exists behind it, so don't offer a drill-down.
+                      return (
+                        <div
+                          key={f.category}
+                          className="w-full flex items-center justify-between text-xs px-1.5 py-1"
+                          title="VAT/GST Amazon charges on its own fees"
+                        >
+                          <span className="flex items-center gap-2 min-w-0">
+                            <span className="h-2.5 w-2.5 rounded-sm shrink-0" style={{ background: f.color }} />
+                            <span className="truncate">{f.category}</span>
+                          </span>
+                          <span className="tabular-nums text-muted-foreground shrink-0 pr-[18px]">
+                            {fmtPct(f.share)} · {fmtMoney(f.amount)}
+                          </span>
+                        </div>
+                      );
+                    }
                     const kind: FeeItem['kind'] =
                       f.category === 'Advertising' ? 'ads' :
                       f.category === 'COGS' ? 'cogs' : 'fee-category';
@@ -405,6 +465,7 @@ export function PnlDashboard({ spid, scope, dateFilter, customDateRange }: Props
                       <TableHead className="text-right">Sales (GBP)</TableHead>
                       <TableHead className="text-right">Fees (GBP)</TableHead>
                       <TableHead className="text-right">Ads (GBP)</TableHead>
+                      <TableHead className="text-right" title="VAT/GST Amazon charges on its own fees">Tax on fees (GBP)</TableHead>
                       <TableHead className="text-right">Net proceeds (GBP)</TableHead>
                       <TableHead className="text-right">COGS (GBP)</TableHead>
                       <TableHead className="text-right">Net profit (GBP)</TableHead>
@@ -435,6 +496,14 @@ export function PnlDashboard({ spid, scope, dateFilter, customDateRange }: Props
                             <TableCell className="text-right tabular-nums">{fmtGbp(sales)}</TableCell>
                             <TableCell className="text-right tabular-nums">{fmtGbp(Math.abs(Number(r.fees_gbp || 0)))}</TableCell>
                             <TableCell className="text-right tabular-nums">{fmtGbp(Math.abs(Number(r.ads_gbp || 0)))}</TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {fmtGbp(balancingTax(
+                                sales,
+                                Math.abs(Number(r.fees_gbp || 0)),
+                                Math.abs(Number(r.ads_gbp || 0)),
+                                Number(r.net_proceeds_gbp || 0),
+                              ))}
+                            </TableCell>
                             <TableCell className="text-right tabular-nums">{fmtGbp(Number(r.net_proceeds_gbp || 0))}</TableCell>
                             <TableCell className="text-right tabular-nums">
                               {Number(r.cogs_gbp || 0) === 0 ? '—' : fmtGbp(Math.abs(Number(r.cogs_gbp || 0)))}
@@ -451,6 +520,9 @@ export function PnlDashboard({ spid, scope, dateFilter, customDateRange }: Props
                       <TableCell className="text-right tabular-nums">{fmtGbp(totals.salesGbp)}</TableCell>
                       <TableCell className="text-right tabular-nums">{fmtGbp(totals.feesGbp)}</TableCell>
                       <TableCell className="text-right tabular-nums">{fmtGbp(totals.ads)}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {fmtGbp(balancingTax(totals.salesGbp, totals.feesGbp, totals.ads, totals.netProceeds))}
+                      </TableCell>
                       <TableCell className="text-right tabular-nums">{fmtGbp(totals.netProceeds)}</TableCell>
                       <TableCell className="text-right tabular-nums">{totals.cogs === 0 ? '—' : fmtGbp(totals.cogs)}</TableCell>
                       <TableCell className="text-right tabular-nums">{fmtGbp(totals.profit)}</TableCell>

@@ -55,7 +55,6 @@ export const BrandAnalyticsCountry = ({ spid, scope }: Props) => {
   const [queries, setQueries] = useState<SearchQueryRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAll, setShowAll] = useState(false);
-  const [sortMode, setSortMode] = useState<'click_share' | 'search_volume' | 'brand_clicks'>('click_share');
 
   useEffect(() => {
     let cancelled = false;
@@ -79,29 +78,35 @@ export const BrandAnalyticsCountry = ({ spid, scope }: Props) => {
     return () => { cancelled = true; };
   }, [spid, scope]);
 
-  const sortField = sortMode === 'click_share' ? 'click_share'
-    : sortMode === 'search_volume' ? 'search_volume'
-    : 'brand_clicks';
-
   const { sortedData, sortField: sf, sortDirection, handleSort } = useTableSort<SearchQueryRow>({
     data: queries,
-    defaultSortField: sortField as keyof SearchQueryRow,
+    defaultSortField: 'click_share',
     defaultSortDirection: 'desc',
   });
 
-  // When sortMode toggles, re-sort
-  useEffect(() => {
-    handleSort(sortField as keyof SearchQueryRow);
-    // handleSort toggles on identical field; call twice if needed to enforce desc
-    // simplest: not perfect but user can click header
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sortMode]);
+  // The sort buttons drive the same state as the column headers, so the
+  // highlighted button is always the sort actually applied. (Previously a
+  // separate `sortMode` state ran handleSort on mount, which — because
+  // handleSort toggles when the field is unchanged — flipped the default
+  // click-share sort to ascending, so "Our click share" looked selected but
+  // the table was not sorted the way the label implied.)
+  const applySort = (field: keyof SearchQueryRow) => {
+    if (sf !== field || sortDirection === 'asc') handleSort(field);
+  };
 
   const visible = showAll ? sortedData : sortedData.slice(0, 50);
 
-  const totalBrandPurchases = useMemo(
-    () => queries.reduce((s, r) => s + (r.brand_purchases ?? 0), 0),
+  // Rows Amazon did not report a brand purchase share for come back null; they
+  // are excluded from the total rather than counted as zero.
+  const reportedPurchases = useMemo(
+    () => queries.filter((r) => r.brand_purchases != null),
     [queries]
+  );
+  const totalBrandPurchases = useMemo(
+    () => (reportedPurchases.length === 0
+      ? null
+      : reportedPurchases.reduce((s, r) => s + (r.brand_purchases ?? 0), 0)),
+    [reportedPurchases]
   );
   const maxMarketplaces = useMemo(
     () => queries.reduce((m, r) => Math.max(m, r.marketplaces ?? 0), 0),
@@ -193,8 +198,8 @@ export const BrandAnalyticsCountry = ({ spid, scope }: Props) => {
             <Button
               key={opt.key}
               size="sm"
-              variant={sortMode === opt.key ? 'default' : 'outline'}
-              onClick={() => setSortMode(opt.key)}
+              variant={sf === opt.key ? 'default' : 'outline'}
+              onClick={() => applySort(opt.key)}
               className="h-7 text-xs"
             >
               {opt.label}
@@ -204,6 +209,8 @@ export const BrandAnalyticsCountry = ({ spid, scope }: Props) => {
 
         <p className="text-[11px] text-muted-foreground">
           Share = the brand's share of that search term's total impressions / clicks / purchases on Amazon.
+          Est. purchases = that share applied to the term's total purchases. A dash means Amazon did not
+          report a brand share for that term.
         </p>
 
         {/* Table */}

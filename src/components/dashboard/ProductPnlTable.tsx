@@ -33,6 +33,8 @@ interface ProductRow {
   sales_gbp: number;
   fees_gbp: number;
   ads_gbp: number;
+  /** Amazon's tax on its own fees — deducted before net proceeds. */
+  tax_gbp: number;
   net_proceeds_gbp: number;
   cogs_gbp: number;
   profit_gbp: number;
@@ -40,6 +42,7 @@ interface ProductRow {
   sales_native?: number | null;
   fees_native?: number | null;
   ads_native?: number | null;
+  tax_native?: number | null;
   net_proceeds_native?: number | null;
   cogs_native?: number | null;
   profit_native?: number | null;
@@ -48,6 +51,13 @@ interface ProductRow {
 
 const fmtInt = (v: number) => new Intl.NumberFormat('en-GB').format(Math.round(v || 0));
 const fmtPct = (v: number) => `${(v * 100).toFixed(1)}%`;
+
+/** Round the way Intl does with maximumFractionDigits: 0 (half away from zero). */
+const r0 = (v: number) => (v < 0 ? -Math.round(-v) : Math.round(v || 0));
+/** Tax on Amazon fees is the balance between net proceeds and the lines before it;
+ *  derive the printed value from the printed figures so each row foots exactly. */
+const balancingTax = (sales: number, fees: number, ads: number, netProceeds: number) =>
+  r0(sales) - r0(fees) - r0(ads) - r0(netProceeds);
 
 type ParsedRow = { identifier: string; cost: number };
 type UploadResult = { identifier: string; status: 'asin' | 'sku' | 'unmatched' | 'no-brand' | 'error'; error?: string };
@@ -120,6 +130,7 @@ export function ProductPnlTable({ spid, scope, dateFilter, customDateRange }: Pr
       sales: rows.reduce((s, r) => s + getMoneyVal(r, 'sales_native', 'sales_gbp'), 0),
       fees: Math.abs(rows.reduce((s, r) => s + getMoneyVal(r, 'fees_native', 'fees_gbp'), 0)),
       ads: Math.abs(rows.reduce((s, r) => s + getMoneyVal(r, 'ads_native', 'ads_gbp'), 0)),
+      tax: rows.reduce((s, r) => s + getMoneyVal(r, 'tax_native', 'tax_gbp'), 0),
       netProceeds: rows.reduce((s, r) => s + getMoneyVal(r, 'net_proceeds_native', 'net_proceeds_gbp'), 0),
       cogs: Math.abs(rows.reduce((s, r) => s + getMoneyVal(r, 'cogs_native', 'cogs_gbp'), 0)),
       profit: rows.reduce((s, r) => s + getMoneyVal(r, 'profit_native', 'profit_gbp'), 0),
@@ -307,6 +318,7 @@ export function ProductPnlTable({ spid, scope, dateFilter, customDateRange }: Pr
                   <SortableTableHead field="sales_gbp" currentField={sortField} direction={sortDirection} onSort={handleSort} className="text-right">Sales</SortableTableHead>
                   <SortableTableHead field="fees_gbp" currentField={sortField} direction={sortDirection} onSort={handleSort} className="text-right">Fees</SortableTableHead>
                   <SortableTableHead field="ads_gbp" currentField={sortField} direction={sortDirection} onSort={handleSort} className="text-right">Ads</SortableTableHead>
+                  <SortableTableHead field="tax_gbp" currentField={sortField} direction={sortDirection} onSort={handleSort} className="text-right"><span title="VAT/GST Amazon charges on its own fees">Tax on fees</span></SortableTableHead>
                   <SortableTableHead field="net_proceeds_gbp" currentField={sortField} direction={sortDirection} onSort={handleSort} className="text-right">Net proceeds</SortableTableHead>
                   <TableHead className="text-right">COGS</TableHead>
                   <SortableTableHead field="profit_gbp" currentField={sortField} direction={sortDirection} onSort={handleSort} className="text-right">Net profit</SortableTableHead>
@@ -323,6 +335,7 @@ export function ProductPnlTable({ spid, scope, dateFilter, customDateRange }: Pr
                   const ads = Math.abs(getMoneyVal(r, 'ads_native', 'ads_gbp'));
                   const cogs = Math.abs(getMoneyVal(r, 'cogs_native', 'cogs_gbp'));
                   const netProceeds = getMoneyVal(r, 'net_proceeds_native', 'net_proceeds_gbp');
+                  const tax = balancingTax(sales, fees, ads, netProceeds);
                   return (
                     <TableRow key={r.asin}>
                       <TableCell className="max-w-xs">
@@ -338,6 +351,7 @@ export function ProductPnlTable({ spid, scope, dateFilter, customDateRange }: Pr
                       <TableCell className="text-right tabular-nums">{fmtMoney(sales, r.currency)}</TableCell>
                       <TableCell className="text-right tabular-nums text-muted-foreground">{fmtMoney(fees, r.currency)}</TableCell>
                       <TableCell className="text-right tabular-nums text-muted-foreground">{fmtMoney(ads, r.currency)}</TableCell>
+                      <TableCell className="text-right tabular-nums text-muted-foreground">{fmtMoney(tax, r.currency)}</TableCell>
                       <TableCell className="text-right tabular-nums">{fmtMoney(netProceeds, r.currency)}</TableCell>
                       <TableCell className="text-right tabular-nums">
                         {isEditing ? (
@@ -389,6 +403,9 @@ export function ProductPnlTable({ spid, scope, dateFilter, customDateRange }: Pr
                   <TableCell className="text-right tabular-nums">{fmtMoney(totals.sales, totalCurrency)}</TableCell>
                   <TableCell className="text-right tabular-nums">{fmtMoney(totals.fees, totalCurrency)}</TableCell>
                   <TableCell className="text-right tabular-nums">{fmtMoney(totals.ads, totalCurrency)}</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {fmtMoney(balancingTax(totals.sales, totals.fees, totals.ads, totals.netProceeds), totalCurrency)}
+                  </TableCell>
                   <TableCell className="text-right tabular-nums">{fmtMoney(totals.netProceeds, totalCurrency)}</TableCell>
                   <TableCell className="text-right tabular-nums">{totals.cogs === 0 ? '—' : fmtMoney(totals.cogs, totalCurrency)}</TableCell>
                   <TableCell className="text-right tabular-nums">{fmtMoney(totals.profit, totalCurrency)}</TableCell>
