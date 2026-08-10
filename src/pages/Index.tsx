@@ -1437,7 +1437,21 @@ const Index = () => {
               {focusTab === "performance" && (
                 <div className="space-y-6">
                   {/* Collapsible Alerts */}
-                  <CollapsibleAlerts merchantToken={focusedAccount.merchantToken} accountName={focusedAccount.name} />
+                  <CollapsibleAlerts
+                    merchantToken={focusedAccount.merchantToken}
+                    accountName={focusedAccount.name}
+                    dataIssue={
+                      focusedScopedMetrics.completeness.materiallyIncomplete
+                        ? {
+                            title:
+                              focusedScopedMetrics.completeness.level === 'empty'
+                                ? 'No sales data for this period'
+                                : 'Incomplete sales data for this period',
+                            detail: focusedScopedMetrics.completeness.headline,
+                          }
+                        : null
+                    }
+                  />
 
                   {focusedBrandCountries.spid && (
                     <SalesTrendCard

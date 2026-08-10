@@ -30,6 +30,18 @@ interface MetricsCardProps {
    * Leave unset for ratios and averages, which legitimately do not sum.
    */
   seriesSemantics?: 'sum' | 'average';
+  /**
+   * Set when the period is too incomplete for a period-on-period delta to mean
+   * anything. Lockabox held two days of July against the whole of June and
+   * called it "91.8% worse". The reason replaces the delta badge — a blank
+   * space would just look like a card that failed to load.
+   */
+  comparisonSuppressedReason?: string;
+  /**
+   * Short qualifier printed against the headline figure, e.g. "2 of 31 days".
+   * Use when the number is real but is not the period total it appears to be.
+   */
+  qualifier?: string;
 }
 
 export const MetricsCard = ({
@@ -47,6 +59,8 @@ export const MetricsCard = ({
   info,
   subtitle,
   seriesSemantics,
+  comparisonSuppressedReason,
+  qualifier,
 }: MetricsCardProps) => {
   const sumCheck = seriesSemantics === 'sum'
     ? checkTotalAgainstSeries(currentValue, sparklineData)
@@ -92,8 +106,15 @@ export const MetricsCard = ({
                 </span>
               </div>
             ) : (
-              <div className={`text-lg md:text-2xl font-bold tracking-tight ${color} ${onClick ? 'group-hover:scale-105' : ''} transition-transform duration-200`}>
-                {value}
+              <div>
+                <div className={`text-lg md:text-2xl font-bold tracking-tight ${color} ${onClick ? 'group-hover:scale-105' : ''} transition-transform duration-200`}>
+                  {value}
+                </div>
+                {qualifier && (
+                  <div className="mt-0.5 inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-900">
+                    {qualifier}
+                  </div>
+                )}
               </div>
             )}
             {!sumMismatch && chartData && chartData.length > 1 && (
@@ -118,13 +139,19 @@ export const MetricsCard = ({
           {/* Change vs baseline — sits directly under the headline number so the
               big figure is never carried by colour alone. */}
           <div className="-mt-0.5">
-            <TrendIndicator
-              currentValue={currentValue}
-              previousValue={previousValue}
-              isPercentage={isPercentage}
-              comparisonLabel={comparisonLabel}
-              invertSentiment={invertSentiment}
-            />
+            {comparisonSuppressedReason ? (
+              <p className="text-[10px] md:text-[11px] text-amber-700 leading-tight">
+                {comparisonSuppressedReason}
+              </p>
+            ) : (
+              <TrendIndicator
+                currentValue={currentValue}
+                previousValue={previousValue}
+                isPercentage={isPercentage}
+                comparisonLabel={comparisonLabel}
+                invertSentiment={invertSentiment}
+              />
+            )}
           </div>
 
           {subtitle && (

@@ -42,7 +42,7 @@ const METRIC_OPTIONS = [
   { value: 'unitsOrdered' as MetricType, label: 'Units Ordered' },
   { value: 'pageViews' as MetricType, label: 'Page Views' },
   { value: 'buyBoxPercentage' as MetricType, label: 'Buy Box %' },
-  { value: 'conversionRate' as MetricType, label: 'Conversion Rate' },
+  { value: 'conversionRate' as MetricType, label: 'Conversion Rate (units ÷ sessions)' },
 ];
 
 const VENDOR_EXCLUDED_METRICS = ['pageViews', 'buyBoxPercentage', 'conversionRate'];
@@ -806,6 +806,8 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
       return '-';
     }
     
+    if (metric === 'conversionRate' && value > 100) return '—';
+
     switch (metric) {
       case 'sales':
       case 'ppcSpend':
@@ -826,6 +828,9 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
   };
 
   const getTooltipValue = (value: number, metric: MetricType) => {
+    if (metric === 'conversionRate' && value > 100) {
+      return 'Units exceed sessions — not a conversion rate';
+    }
     switch (metric) {
       case 'sales':
       case 'ppcSpend':
