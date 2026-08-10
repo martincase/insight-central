@@ -20393,10 +20393,13 @@ export type Database = {
           buy_box_pct: number
           conversion: number
           currency: string
+          has_sessions: boolean
           page_views: number
           sales_gbp: number
           sales_native: number
+          sessions: number
           units: number
+          units_with_sessions: number
         }[]
       }
       rpc_pnl_fee_breakdown: {

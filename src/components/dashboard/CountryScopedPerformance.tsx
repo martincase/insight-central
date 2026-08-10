@@ -129,11 +129,15 @@ export function CountryScopedPerformance({
   const pageViewsSpark = series.pageViews;
   const sessionsSpark = series.sessions;
   const buyBoxSpark = series.buyBox;
-  // Per-day conversion from the same two series the total is built from: units
-  // ÷ sessions, where sessions is Amazon's own total-session denominator. The
-  // headline is the session-weighted blend of exactly these cells, so it can no
-  // longer sit above every one of them.
-  const conversionSpark = unitsSpark.map((u, i) => {
+  // Per-day conversion from the same two series the total is built from.
+  //
+  // The numerator is conversionUnits — the units that HAVE a session
+  // denominator — not the day's total units. On a scope holding both a vendor
+  // arm and a seller arm those differ: 27 July divided 815 combined units by
+  // the seller's 12,368 sessions and printed 6.6%, where the seller scope
+  // showed 4.3% for the same day off the same sessions.
+  const conversionUnitsSpark = series.conversionUnits;
+  const conversionSpark = conversionUnitsSpark.map((u, i) => {
     const s = sessionsSpark[i] || 0;
     if (s <= 0) return 0;
     const pct = (u / s) * 100;
@@ -155,6 +159,25 @@ export function CountryScopedPerformance({
   const avgBuyBox = totals?.buyBoxPercentage ?? 0;
   const conversionAvailable = !!totals && totals.conversionRate != null && !totals.conversionImplausible;
   const avgConversion = conversionAvailable ? (totals!.conversionRate as number) : 0;
+
+  // Where the conversion numerator is smaller than the units card, the card has
+  // to say which units it counted — otherwise the two figures sit side by side
+  // contradicting each other. It happens on any scope that mixes a seller arm
+  // with a vendor arm (vendors report no sessions), and on any day whose
+  // traffic feed has not landed yet.
+  const conversionUnits = Math.round(totals?.conversionUnits ?? totalUnits);
+  const conversionPartial = !!totals && !totals.conversionCoversAllUnits;
+  const conversionNumeratorLabel = conversionPartial
+    ? `${fmtNum(conversionUnits)} of ${fmtNum(totalUnits)} units`
+    : `${fmtNum(conversionUnits)} units`;
+  // Seller page views are browser only; vendor page views are glance views.
+  // Summing them under one word, next to an all-devices session count, is what
+  // made sessions look larger than the page views they supposedly sit inside.
+  const pageViewsBasis = !totals?.hasSessions
+    ? undefined
+    : totals.mixedArms
+      ? 'Browser page views + vendor glance views'
+      : 'Browser page views';
 
   const prevPageViews = previousTotals?.pageViews ?? 0;
   const prevAvgBuyBox = previousTotals?.buyBoxPercentage ?? 0;
@@ -260,11 +283,23 @@ export function CountryScopedPerformance({
                     {[
                       { label: 'Sales', spark: salesSpark, max: maxSales, base: '#2563EB', fmt: fmtMoney },
                       { label: 'Units', spark: unitsSpark, max: maxUnits, base: '#10B981', fmt: fmtNum },
-                      { label: totals?.hasSessions ? 'Page views (browser)' : 'Glance views', spark: pageViewsSpark, max: maxPageViews, base: '#2563EB', fmt: fmtNum },
+                      {
+                        label: !totals?.hasSessions
+                          ? 'Glance views'
+                          : totals.mixedArms
+                            ? 'Page views (browser) + glance views'
+                            : 'Page views (browser)',
+                        spark: pageViewsSpark, max: maxPageViews, base: '#2563EB', fmt: fmtNum,
+                      },
                       ...(totals?.hasSessions ? [{ label: 'Sessions (all devices)', spark: sessionsSpark, max: Math.max(1, ...sessionsSpark), base: '#2563EB', fmt: fmtNum }] : []),
                       { label: 'Buy Box %', spark: buyBoxSpark, max: maxBuyBox, base: '#10B981', fmt: fmtPct },
                       // Blank for vendors and for any day where units exceed sessions.
-                      ...(totals?.hasSessions ? [{ label: 'Conversion %', spark: conversionSpark, max: maxConversion, base: '#10B981', fmt: fmtPct }] : []),
+                      ...(totals?.hasSessions
+                        ? [{
+                            label: totals.mixedArms ? 'Conversion % (seller arm)' : 'Conversion %',
+                            spark: conversionSpark, max: maxConversion, base: '#10B981', fmt: fmtPct,
+                          }]
+                        : []),
                     ].map(row => (
                       <tr key={row.label}>
                         <td className="p-2 font-medium sticky left-0 bg-background z-10">{row.label}</td>
@@ -334,7 +369,8 @@ export function CountryScopedPerformance({
               comparisonLabel={comparison}
               sparklineData={pageViewsSpark}
               seriesSemantics="sum"
-              subtitle={totals?.hasSessions ? 'Browser page views' : undefined}
+              subtitle={pageViewsBasis}
+              info="Seller page views are Amazon's BROWSER page views — the mobile app is not in them. Vendor marketplaces report glance views instead. Neither is a session count, so the sessions used for conversion can be the larger number."
               comparisonSuppressedReason={incompleteNote}
               qualifier={partialQualifier}
             />
@@ -349,13 +385,22 @@ export function CountryScopedPerformance({
               comparisonSuppressedReason={incompleteNote}
             />
             <MetricsCard
-              title="Conversion %"
-              info="Units ordered ÷ sessions (all devices) across the whole period — the same denominator as the daily Conversion % cells above. Page views are not sessions, and the page-view row is browser only."
+              // Named for what it measures. Vendor marketplaces report no
+              // sessions, so on a mixed scope this rate covers the seller arm
+              // alone — Portwest whole business is 533 of 36,871 units. Calling
+              // it plain "Conversion %" invited it to be read as the business's.
+              title={totals?.mixedArms ? 'Conversion % (seller arm)' : 'Conversion %'}
+              info={
+                'Units ordered ÷ sessions (all devices) across the whole period — the same denominator as the daily Conversion % cells above. '
+                + 'Only units with a session denominator are counted, so on a scope that also holds a vendor arm (vendors report no sessions), '
+                + 'or on a day whose traffic feed has not arrived, this counts fewer units than the Units Ordered card. '
+                + 'Page views are not sessions, and the page-view figure is browser only.'
+              }
               subtitle={
                 conversionAvailable
-                  ? `${fmtNum(totals?.conversionUnits ?? totalUnits)} units ÷ ${fmtNum(totals?.sessions || 0)} sessions (all devices)`
+                  ? `${conversionNumeratorLabel} ÷ ${fmtNum(totals?.sessions || 0)} sessions (all devices)`
                   : totals?.hasSessions
-                    ? `Units (${fmtNum(totals?.conversionUnits ?? totalUnits)}) exceed sessions (${fmtNum(totals?.sessions || 0)}) — withheld`
+                    ? `Units (${fmtNum(conversionUnits)}) exceed sessions (${fmtNum(totals?.sessions || 0)}) — withheld`
                     : 'Sessions are not reported for this account'
               }
               value={conversionAvailable && !scopedEmpty ? fmtPct(avgConversion) : '—'}

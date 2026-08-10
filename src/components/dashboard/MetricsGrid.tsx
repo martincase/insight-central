@@ -311,6 +311,15 @@ export const MetricsGrid = ({
       : scoped.conversionImplausible
         ? `Units (${Math.round(scoped.conversionUnits ?? scoped.unitsOrdered).toLocaleString()}) exceed sessions (${Math.round(scoped.sessions || 0).toLocaleString()}), so this cannot be a conversion rate.`
         : null;
+  // See CountryScopedPerformance: when the numerator is smaller than the units
+  // card — a vendor arm in scope, or a day whose traffic feed has not landed —
+  // the card names both figures instead of printing one that contradicts the
+  // other.
+  const conversionNumerator = Math.round(scoped?.conversionUnits ?? scoped?.unitsOrdered ?? 0);
+  const conversionPartial = !!scoped && !scoped.conversionCoversAllUnits;
+  const conversionNumeratorLabel = conversionPartial
+    ? `${conversionNumerator.toLocaleString()} of ${Math.round(scoped!.unitsOrdered).toLocaleString()} units`
+    : `${conversionNumerator.toLocaleString()} units`;
   const avgConversionRate = scoped ? (scoped.conversionRate ?? 0) : fallbackConversionRate;
   const avgPreviousConversionRate = scopedPrev
     ? (scopedPrev.conversionImplausible ? 0 : (scopedPrev.conversionRate ?? 0))
@@ -760,7 +769,14 @@ export const MetricsGrid = ({
                 isSelected={selectedChartMetrics?.includes('pageViews')}
                 sparklineData={scopedSeries?.pageViews}
                 seriesSemantics={scopedSeries ? 'sum' : undefined}
-                subtitle={scoped?.hasSessions ? 'Browser page views' : undefined}
+                subtitle={
+                  !scoped?.hasSessions
+                    ? undefined
+                    : scoped.mixedArms
+                      ? 'Browser page views + vendor glance views'
+                      : 'Browser page views'
+                }
+                info="Seller page views are Amazon's BROWSER page views — the mobile app is not in them. Vendor marketplaces report glance views instead. Neither is a session count, so the sessions used for conversion can be the larger number."
                 comparisonSuppressedReason={incompleteNote}
                 qualifier={partialQualifier}
               />
@@ -779,12 +795,18 @@ export const MetricsGrid = ({
               />
 
               <MetricsCard
-                title="Conversion Rate"
-                info={`Units ordered ÷ ${conversionDenominatorLabel} for the whole period. Page views are not sessions — one session can span several page views — so the two give different rates.`}
+                // See CountryScopedPerformance: on a scope that also holds a
+                // vendor arm this rate covers the seller arm alone.
+                title={scoped?.mixedArms ? 'Conversion Rate (seller arm)' : 'Conversion Rate'}
+                info={
+                  `Units ordered ÷ ${conversionDenominatorLabel} for the whole period. `
+                  + 'Only units with a session denominator are counted, so where a scope also holds a vendor arm, or a day\'s traffic feed has not arrived, this counts fewer units than the Units card. '
+                  + 'Page views are not sessions — one session can span several page views, and the page-view figure is browser only — so the two give different rates.'
+                }
                 subtitle={
                   conversionAvailable
                     ? (scoped?.sessions != null
-                        ? `${Math.round(scoped.conversionUnits ?? scoped.unitsOrdered).toLocaleString()} units ÷ ${Math.round(scoped.sessions).toLocaleString()} ${conversionDenominatorLabel}`
+                        ? `${conversionNumeratorLabel} ÷ ${Math.round(scoped.sessions).toLocaleString()} ${conversionDenominatorLabel}`
                         : undefined)
                     : conversionUnavailableReason
                 }

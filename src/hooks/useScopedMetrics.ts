@@ -31,6 +31,14 @@ export interface ScopedDailyRow {
   sessions: number | null;
   buy_box_pct: number | null;
   conversion: number | null;
+  /**
+   * The units that HAVE a session denominator — the seller arm only, on a scope
+   * that also holds a vendor arm. This is the conversion numerator; the day's
+   * total `units` is not, and dividing that by seller sessions is what put the
+   * whole-business daily cells at 6.6% against the seller scope's 4.3%.
+   */
+  units_with_sessions: number | null;
+  /** Does this day carry a recoverable session denominator at all. */
   has_sessions: boolean;
   /** null when the DAY itself spans more than one currency. */
   currency: string | null;
@@ -52,6 +60,19 @@ export interface ScopedTotals {
   conversionRate: number | null;
   /** Units counted in the conversion numerator — only days with a denominator. */
   conversionUnits: number | null;
+  /**
+   * False when the conversion numerator is smaller than unitsOrdered, i.e. some
+   * of the period's units have no session denominator — a vendor arm inside the
+   * scope, or a day whose traffic half of the feed has not landed. The card must
+   * say so rather than print a units figure that contradicts the units card.
+   */
+  conversionCoversAllUnits: boolean;
+  /**
+   * True when the scope holds an arm that reports no sessions at all (a vendor
+   * account) alongside one that does. The page-view figure is then a sum of
+   * browser page views and vendor glance views, and has to say so.
+   */
+  mixedArms: boolean;
   /** True when conversion came out above 100% — real data, but not printable. */
   conversionImplausible: boolean;
 }
@@ -61,6 +82,8 @@ export interface ScopedSeries {
   units: number[];
   pageViews: number[];
   sessions: number[];
+  /** Per-day conversion numerator — units that have a session denominator. */
+  conversionUnits: number[];
   buyBox: number[];
 }
 
@@ -76,7 +99,9 @@ export interface UseScopedMetricsResult {
   error: string | null;
 }
 
-const EMPTY_SERIES: ScopedSeries = { sales: [], units: [], pageViews: [], sessions: [], buyBox: [] };
+const EMPTY_SERIES: ScopedSeries = {
+  sales: [], units: [], pageViews: [], sessions: [], conversionUnits: [], buyBox: [],
+};
 
 const num = (v: unknown) => Number(v) || 0;
 
@@ -110,20 +135,28 @@ function summarise(rows: ScopedDailyRow[]): ScopedTotals | null {
   const salesGbp = rows.reduce((s, r) => s + num(r.sales_gbp), 0);
   const sales = single ? rows.reduce((s, r) => s + num(r.sales_native), 0) : salesGbp;
 
-  // Conversion is rebuilt from the per-day rate the RPC computed, weighted by
-  // that day's sessions. Algebraically that is Σunits ÷ Σsessions over exactly
-  // the rows that HAVE a session denominator — which is not the same as the
-  // day's total units when a scope mixes a seller arm (sessions) with a vendor
-  // arm (none). S Green & Sons is that case: dividing the combined unit count
-  // by the seller-only session count put the headline at 6.4% above a daily
-  // range of 3.2–5.1%. Weighted properly it is 4.08%, inside its own cells.
+  // Conversion is Σ(units that have a denominator) ÷ Σsessions over exactly the
+  // days that carry one. Both halves now come straight from the RPC:
+  // units_with_sessions is the seller arm's units, never the combined count, so
+  // a scope spanning a seller arm (sessions) and a vendor arm (none) divides
+  // like with like.
+  //
+  // The numerator used to be recovered by multiplying the RPC's `conversion`,
+  // rounded to two decimals, back out by `sessions` — an approximation standing
+  // in for a figure the query already had.
+  //
+  // has_sessions was also read as "did every arm report sessions", which it was
+  // (bool_and) until the migration below it. On S Green & Sons whole business
+  // that left ONE qualifying day out of fourteen — the single day the vendor
+  // feed had not delivered — and printed it as the fortnight's conversion:
+  // "3.4% — 404 units ÷ 12,060 sessions", beside a units card reading 10,078.
   const convRows = rows.filter(
     (r) => r.has_sessions && r.sessions != null && num(r.sessions) > 0 && r.conversion != null,
   );
   const hasSessions = convRows.length > 0;
   const sessions = hasSessions ? convRows.reduce((s, r) => s + num(r.sessions), 0) : null;
   const conversionUnits = hasSessions
-    ? convRows.reduce((s, r) => s + (num(r.conversion) / 100) * num(r.sessions), 0)
+    ? convRows.reduce((s, r) => s + num(r.units_with_sessions), 0)
     : null;
 
   const rawConversion =
@@ -150,6 +183,12 @@ function summarise(rows: ScopedDailyRow[]): ScopedTotals | null {
     buyBoxPercentage,
     conversionRate: rawConversion,
     conversionUnits,
+    conversionCoversAllUnits: conversionUnits != null && Math.round(conversionUnits) >= unitsOrdered,
+    // A day that HAS a denominator and still shows more units than the
+    // denominator covers is a day two arms both reported on.
+    mixedArms: rows.some(
+      (r) => r.has_sessions && r.sessions != null && num(r.units) > num(r.units_with_sessions),
+    ),
     conversionImplausible,
   };
 }
@@ -244,6 +283,7 @@ export function useScopedMetrics(
       units: pick((r) => num(r.units), 0),
       pageViews: pick((r) => num(r.page_views), 0),
       sessions: pick((r) => num(r.sessions), 0),
+      conversionUnits: pick((r) => num(r.units_with_sessions), 0),
       buyBox: pick((r) => num(r.buy_box_pct), 0),
     };
   }, [daily, days, byDay, single]);
