@@ -104,7 +104,7 @@ export const SearchTermKeywordMapDashboard: React.FC<SearchTermKeywordMapDashboa
       item.total_sales.toFixed(2),
       item.total_orders,
       item.ctr.toFixed(2),
-      item.acos.toFixed(2),
+      item.total_sales > 0 ? item.acos.toFixed(2) : 'N/A',
       item.is_negative_candidate ? 'Yes' : 'No'
     ]);
 
@@ -165,6 +165,7 @@ export const SearchTermKeywordMapDashboard: React.FC<SearchTermKeywordMapDashboa
         <MatchTypeComparisonCards
           summaries={matchTypeSummaries}
           onMatchTypeClick={handleMatchTypeClick}
+          scope={scope}
         />
 
         {/* Filters */}

@@ -6,6 +6,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { CountryScope } from './CountrySwitcher';
 import { getCurrencyInfo } from '@/utils/currencyUtils';
+import { formatMoney } from '@/utils/formatters';
 import { useChartReady } from '@/hooks/useChartReady';
 import { SalesByWeekdayCard } from './SalesByWeekdayCard';
 import { isRollupScope } from '@/utils/scope';
@@ -58,7 +59,7 @@ export function SalesDriversTab({ spid, scope, primaryCountry }: Props) {
 
   const cur = getCurrencyInfo(scope);
   const fmtMoney = (v: number) =>
-    `${cur.symbol}${new Intl.NumberFormat(cur.locale, { maximumFractionDigits: 0 }).format(v ?? 0)}`;
+    formatMoney(v ?? 0, cur, 0);
 
   const isRollup = isRollupScope(scope);
   const wxCountry = isRollup ? (primaryCountry || 'GB') : scope;

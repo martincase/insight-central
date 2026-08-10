@@ -4,10 +4,14 @@ import { Badge } from '@/components/ui/badge';
 import { Target, MousePointerClick, TrendingUp, PoundSterling } from 'lucide-react';
 import type { MatchTypeSummary } from '@/types/ppcAnalytics';
 import { getMatchTypeLabel } from '@/utils/matchTypeUtils';
+import { getCurrencyInfo } from '@/utils/currencyUtils';
+import { formatAcos, formatMoney, isAcosDefined } from '@/utils/formatters';
+import type { CountryScope } from '@/components/dashboard/CountrySwitcher';
 
 interface MatchTypeComparisonCardsProps {
   summaries: MatchTypeSummary[];
   onMatchTypeClick: (matchType: string) => void;
+  scope?: CountryScope;
 }
 
 // No fixed order needed - we use friendly labels now
@@ -15,7 +19,10 @@ interface MatchTypeComparisonCardsProps {
 export const MatchTypeComparisonCards: React.FC<MatchTypeComparisonCardsProps> = ({
   summaries,
   onMatchTypeClick,
+  scope,
 }) => {
+  // The symbol was hard-coded to £, so an AUD or SEK account read as sterling.
+  const cur = getCurrencyInfo(scope);
   const sortedSummaries = [...summaries].sort((a, b) => a.match_type.localeCompare(b.match_type));
 
   // Calculate totals for percentage calculations
@@ -32,6 +39,7 @@ export const MatchTypeComparisonCards: React.FC<MatchTypeComparisonCardsProps> =
         const spendPct = totalSpend > 0 ? (summary.total_spend / totalSpend) * 100 : 0;
         const mappingsPct = totalMappings > 0 ? (summary.total_mappings / totalMappings) * 100 : 0;
         const mt = getMatchTypeLabel(summary.match_type);
+        const acosDefined = isAcosDefined(summary.total_spend, summary.total_sales);
 
         return (
           <Card
@@ -56,8 +64,17 @@ export const MatchTypeComparisonCards: React.FC<MatchTypeComparisonCardsProps> =
                     <Target className="h-3 w-3" />
                     Avg ACOS
                   </span>
-                  <span className={`font-semibold ${summary.avg_acos > 50 ? 'text-destructive' : summary.avg_acos > 30 ? 'text-amber-500' : 'text-emerald-500'}`}>
-                    {summary.avg_acos.toFixed(1)}%
+                  {/* No sales means ACOS is undefined; "0.0%" would read as
+                      perfect efficiency on spend that returned nothing. */}
+                  <span className={`font-semibold ${
+                    !acosDefined ? 'text-muted-foreground'
+                      : summary.avg_acos > 50 ? 'text-destructive'
+                      : summary.avg_acos > 30 ? 'text-amber-500'
+                      : 'text-emerald-500'
+                  }`}>
+                    {acosDefined
+                      ? `${summary.avg_acos.toFixed(1)}%`
+                      : formatAcos(summary.total_spend, summary.total_sales)}
                   </span>
                 </div>
 
@@ -68,7 +85,7 @@ export const MatchTypeComparisonCards: React.FC<MatchTypeComparisonCardsProps> =
                     Avg CPC
                   </span>
                   <span className="font-medium">
-                    £{summary.avg_cpc.toFixed(2)}
+                    {formatMoney(summary.avg_cpc, cur)}
                   </span>
                 </div>
 
@@ -98,13 +115,13 @@ export const MatchTypeComparisonCards: React.FC<MatchTypeComparisonCardsProps> =
                 <div className="flex items-center justify-between pt-2 border-t border-border">
                   <span className="text-sm text-muted-foreground">Spend</span>
                   <span className="font-medium">
-                    £{summary.total_spend.toFixed(0)} ({spendPct.toFixed(0)}%)
+                    {formatMoney(summary.total_spend, cur, 0)} ({spendPct.toFixed(0)}%)
                   </span>
                 </div>
 
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-muted-foreground">Sales</span>
-                  <span className="font-medium">£{summary.total_sales.toFixed(0)}</span>
+                  <span className="font-medium">{formatMoney(summary.total_sales, cur, 0)}</span>
                 </div>
               </div>
 

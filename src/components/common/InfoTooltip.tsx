@@ -28,17 +28,28 @@ export const InfoTooltip = ({
 }: InfoTooltipProps) => (
   <TooltipProvider delayDuration={150}>
     <Tooltip>
+      {/*
+        The trigger is a <span>, not a <button>. Several call sites drop an
+        InfoTooltip inside a sortable table header — which is itself a button —
+        and a nested <button> is invalid HTML (React logs
+        "validateDOMNesting: <button> cannot appear as a descendant of <button>"
+        on every render). role="img" + aria-label keeps the icon named for
+        screen readers without making it a second interactive control, and
+        tabIndex keeps it reachable by keyboard so the tooltip still opens.
+      */}
       <TooltipTrigger asChild>
-        <button
-          type="button"
+        <span
+          role="img"
           aria-label="More info"
+          tabIndex={0}
           className={cn(
-            'inline-flex items-center justify-center text-muted-foreground/60 hover:text-foreground transition-colors',
+            'inline-flex items-center justify-center cursor-help text-muted-foreground/60 hover:text-foreground transition-colors',
+            'focus:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm',
             className,
           )}
         >
           <Info className="h-3.5 w-3.5" />
-        </button>
+        </span>
       </TooltipTrigger>
       <TooltipContent side={side} align={align} className={cn('max-w-xs text-xs leading-relaxed', contentClassName)}>
         {content}

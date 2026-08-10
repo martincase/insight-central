@@ -8,6 +8,7 @@ import { Package, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown, Tr
 import { supabase } from '@/integrations/supabase/client';
 import { Skeleton } from '@/components/ui/skeleton';
 import { getCurrencyInfo } from '@/utils/currencyUtils';
+import { formatMoney } from '@/utils/formatters';
 import type { CountryScope } from '@/components/dashboard/CountrySwitcher';
 
 interface ApiAdvertisedProductsDashboardProps {
@@ -35,8 +36,7 @@ type SortDir = 'asc' | 'desc';
 
 export function ApiAdvertisedProductsDashboard({ accountName, scope }: ApiAdvertisedProductsDashboardProps) {
   const cur = getCurrencyInfo(scope);
-  const fmtMoney = (v: number | null | undefined) =>
-    v == null ? '—' : `${cur.symbol}${new Intl.NumberFormat(cur.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v)}`;
+  const fmtMoney = (v: number | null | undefined) => (v == null ? '—' : formatMoney(v, cur));
   const [profileId, setProfileId] = useState<number | null | undefined>(undefined);
   const [apiAccountName, setApiAccountName] = useState<string | null | undefined>(undefined);
   const [aggregatedData, setAggregatedData] = useState<AggregatedProduct[]>([]);
@@ -137,40 +137,47 @@ export function ApiAdvertisedProductsDashboard({ accountName, scope }: ApiAdvert
         const titleMap = new Map<string, string>();
 
         if (asins.length > 0) {
-          // PRIMARY: daily_inventory_data
-          const { data: invData, error: invErr } = await supabase
-            .from('daily_inventory_data')
-            .select('asin, product_name')
-            .not('product_name', 'is', null)
-            .not('product_name', 'eq', '')
-            .limit(10000);
+          // Look the titles up BY ASIN, from a source the browser can actually
+          // read. Two things were wrong before: the query pulled the first
+          // 10,000 rows of the title tables with no filter at all and hoped the
+          // ASINs it needed were in there (against ~7M rows, a lottery), and
+          // its primary table — spapi_listings_stockprice_staging — has RLS on
+          // with no SELECT policy, so from the browser it always returns zero.
+          // The titles were never missing; they were never joined.
+          //
+          // The listings snapshot is daily, so it is also windowed to the last
+          // fortnight: without that, one ASIN can occupy 400+ rows and the
+          // 1,000-row response cap is hit long before every ASIN is covered.
+          const since = new Date();
+          since.setDate(since.getDate() - 14);
+          const sinceStr = since.toISOString().split('T')[0];
 
-          console.log('[AdProducts] daily_inventory_data rows:', invData?.length ?? 0, 'error:', invErr?.message ?? 'none');
-          if (invData) {
-            for (const row of invData) {
-              if (row.asin && row.product_name && !titleMap.has(row.asin)) {
-                titleMap.set(row.asin, row.product_name);
+          const CHUNK = 25;
+          for (let i = 0; i < asins.length; i += CHUNK) {
+            const chunk = asins.slice(i, i + CHUNK);
+            for (let p = 0; p < 10; p++) {
+              const { data: rows, error: err } = await supabase
+                .from('perplexity_all_listings_stockprice_data')
+                .select('asin, item_name')
+                .in('asin', chunk)
+                .gte('record_date', sinceStr)
+                .not('item_name', 'is', null)
+                .range(p * 1000, p * 1000 + 999);
+              if (err) {
+                console.warn('[AdProducts] title lookup failed:', err.message);
+                break;
               }
+              if (!rows || rows.length === 0) break;
+              for (const row of rows) {
+                if (row.asin && row.item_name && !titleMap.has(row.asin)) {
+                  titleMap.set(row.asin, row.item_name);
+                }
+              }
+              // Stop as soon as every ASIN in this chunk has a name.
+              if (rows.length < 1000 || chunk.every(a => titleMap.has(a))) break;
             }
           }
-          console.log('[AdProducts] Names from daily_inventory_data:', titleMap.size);
-
-          // FALLBACK: perplexity_all_listings_stockprice_data
-          const { data: listData, error: listErr } = await supabase
-            .from('perplexity_all_listings_stockprice_data')
-            .select('asin, item_name')
-            .not('item_name', 'is', null)
-            .not('item_name', 'eq', '')
-            .limit(10000);
-
-          console.log('[AdProducts] perplexity listings rows:', listData?.length ?? 0, 'error:', listErr?.message ?? 'none');
-          if (listData) {
-            for (const row of listData) {
-              if (row.asin && row.item_name && !titleMap.has(row.asin)) {
-                titleMap.set(row.asin, row.item_name);
-              }
-            }
-          }
+          console.log('[AdProducts] Names resolved:', titleMap.size, 'of', asins.length);
           setProductTitles(titleMap);
         }
 
@@ -200,7 +207,9 @@ export function ApiAdvertisedProductsDashboard({ accountName, scope }: ApiAdvert
 
         const products: AggregatedProduct[] = Array.from(asinMap.entries()).map(([asin, d]) => ({
           advertised_asin: asin,
-          product_title: titleMap.get(asin) || asin,
+          // Empty, not the ASIN — so the table can be honest about a title it
+          // genuinely does not have rather than dressing an ASIN up as a name.
+          product_title: titleMap.get(asin) || '',
           impressions: d.imp,
           clicks: d.clk,
           spend: d.spd,
@@ -229,7 +238,7 @@ export function ApiAdvertisedProductsDashboard({ accountName, scope }: ApiAdvert
     if (productTitles.size === 0 || aggregatedData.length === 0) return;
     setAggregatedData(prev => prev.map(p => ({
       ...p,
-      product_title: productTitles.get(p.advertised_asin) || p.advertised_asin,
+      product_title: productTitles.get(p.advertised_asin) || '',
     })));
   }, [productTitles]);
 
@@ -309,6 +318,9 @@ export function ApiAdvertisedProductsDashboard({ accountName, scope }: ApiAdvert
   const truncateTitle = (title: string, maxLen = 50) =>
     title.length > maxLen ? title.substring(0, maxLen) + '…' : title;
 
+  /** Falls back to the ASIN where the listings feed carries no title. */
+  const displayName = (p: AggregatedProduct) => p.product_title || p.advertised_asin;
+
   return (
     <Card className="bg-card border-0 shadow-lg overflow-hidden">
       <div className="h-1.5 bg-gradient-to-r from-orange-500 via-amber-500 to-yellow-500" />
@@ -347,8 +359,8 @@ export function ApiAdvertisedProductsDashboard({ accountName, scope }: ApiAdvert
                   <ShoppingCart className="h-4 w-4 text-emerald-500" />
                   <span className="text-xs font-medium text-emerald-600">Top Seller</span>
                 </div>
-                <p className="text-sm font-semibold truncate" title={highlights.topSeller.product_title}>
-                  {truncateTitle(highlights.topSeller.product_title)}
+                <p className="text-sm font-semibold truncate" title={displayName(highlights.topSeller)}>
+                  {truncateTitle(displayName(highlights.topSeller))}
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
                   {fmtMoney(highlights.topSeller.sales)} sales · {highlights.topSeller.orders} orders
@@ -361,8 +373,8 @@ export function ApiAdvertisedProductsDashboard({ accountName, scope }: ApiAdvert
                   <TrendingUp className="h-4 w-4 text-blue-500" />
                   <span className="text-xs font-medium text-blue-600">Most Efficient</span>
                 </div>
-                <p className="text-sm font-semibold truncate" title={highlights.mostEfficient.product_title}>
-                  {truncateTitle(highlights.mostEfficient.product_title)}
+                <p className="text-sm font-semibold truncate" title={displayName(highlights.mostEfficient)}>
+                  {truncateTitle(displayName(highlights.mostEfficient))}
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
                   {highlights.mostEfficient.roas.toFixed(2)}x ROAS · {fmtMoney(highlights.mostEfficient.sales)} sales
@@ -375,8 +387,8 @@ export function ApiAdvertisedProductsDashboard({ accountName, scope }: ApiAdvert
                   <Flame className="h-4 w-4 text-amber-500" />
                   <span className="text-xs font-medium text-amber-600">Highest Spend</span>
                 </div>
-                <p className="text-sm font-semibold truncate" title={highlights.highestSpend.product_title}>
-                  {truncateTitle(highlights.highestSpend.product_title)}
+                <p className="text-sm font-semibold truncate" title={displayName(highlights.highestSpend)}>
+                  {truncateTitle(displayName(highlights.highestSpend))}
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
                   {fmtMoney(highlights.highestSpend.spend)} spend · {fmtMoney(highlights.highestSpend.sales)} sales
@@ -408,7 +420,7 @@ export function ApiAdvertisedProductsDashboard({ accountName, scope }: ApiAdvert
                 <TableHeader>
                   <TableRow className="bg-muted/30">
                     <SortableHeader field="advertised_asin">ASIN</SortableHeader>
-                    <SortableHeader field="product_title">Product</SortableHeader>
+                    <SortableHeader field="product_title">Product name</SortableHeader>
                     <SortableHeader field="impressions">Impressions</SortableHeader>
                     <SortableHeader field="clicks">Clicks</SortableHeader>
                     <SortableHeader field="ctr">CTR</SortableHeader>
@@ -442,8 +454,10 @@ export function ApiAdvertisedProductsDashboard({ accountName, scope }: ApiAdvert
                           <ExternalLink className="h-3 w-3" />
                         </a>
                       </TableCell>
-                      <TableCell className="text-xs max-w-[250px] truncate" title={row.product_title}>
-                        {row.product_title}
+                      <TableCell className="text-xs max-w-[250px] truncate" title={row.product_title || `No product title in the listings feed for ${row.advertised_asin}`}>
+                        {row.product_title
+                          ? row.product_title
+                          : <span className="font-mono text-muted-foreground">{row.advertised_asin}</span>}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{row.impressions.toLocaleString()}</TableCell>
                       <TableCell className="text-right tabular-nums">{row.clicks.toLocaleString()}</TableCell>

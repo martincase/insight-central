@@ -13,6 +13,7 @@ import { format as formatDate, parseISO } from 'date-fns';
 import { getCurrentDateRange } from '@/utils/dataProcessor';
 import type { DateFilter } from '@/types/dashboard';
 import { getCurrencyInfo } from '@/utils/currencyUtils';
+import { formatMoney } from '@/utils/formatters';
 import type { CountryScope } from '@/components/dashboard/CountrySwitcher';
 
 const formatDateFriendly = (dateStr: string) => {
@@ -58,8 +59,7 @@ import { getMatchTypeLabel } from '@/utils/matchTypeUtils';
 
 export function ApiSearchTermsDashboard({ accountName, dateFilter = 'last-7-days', customDateRange, scope }: ApiSearchTermsDashboardProps) {
   const cur = getCurrencyInfo(scope);
-  const fmtMoney = (v: number | null | undefined) =>
-    v == null ? '—' : `${cur.symbol}${new Intl.NumberFormat(cur.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v)}`;
+  const fmtMoney = (v: number | null | undefined) => (v == null ? '—' : formatMoney(v, cur));
   const [profileId, setProfileId] = useState<number | null | undefined>(undefined);
   const [apiAccountName, setApiAccountName] = useState<string | null | undefined>(undefined);
   const [data, setData] = useState<SearchTermRow[]>([]);
@@ -323,8 +323,10 @@ export function ApiSearchTermsDashboard({ accountName, dateFilter = 'last-7-days
         (r.spend || 0).toFixed(2),
         (r.sales_7d || 0).toFixed(2),
         r.orders_7d || 0,
-        (r.acos_7d || 0).toFixed(2),
-        (r.roas_7d || 0).toFixed(2),
+        // No sales means ACoS/ROAS are undefined — exporting 0.00 would read
+        // as flawless efficiency, so the CSV says N/A exactly as the table does.
+        (r.sales_7d || 0) > 0 ? (r.acos_7d || 0).toFixed(2) : 'N/A',
+        (r.sales_7d || 0) > 0 ? (r.roas_7d || 0).toFixed(2) : 'N/A',
         cvr
       ].join(',');
     });
@@ -393,13 +395,21 @@ export function ApiSearchTermsDashboard({ accountName, dateFilter = 'last-7-days
     );
   };
 
-  // Not configured state
-  if (apiAccountName === null && !isLoading) {
+  // Not configured state.
+  // The fetch above prefers profile_id and only falls back to api_account_name,
+  // so an account with a profile_id is configured even when api_account_name is
+  // null — which is most of them. Gating on api_account_name alone hid this
+  // whole table behind a "not configured" notice while the data underneath it
+  // loaded perfectly well.
+  if (profileId === null && apiAccountName === null && !isLoading) {
     return (
       <Card className="bg-card border-0 shadow-lg overflow-hidden">
         <div className="h-1.5 bg-gradient-to-r from-violet-500 via-purple-500 to-indigo-500" />
         <CardContent className="p-8 text-center">
-          <p className="text-muted-foreground">API data not configured for this account</p>
+          <p className="font-medium text-foreground">PPC Search Term Performance</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            This account is not yet linked to an Amazon Ads profile, so search term data cannot be shown.
+          </p>
         </CardContent>
       </Card>
     );

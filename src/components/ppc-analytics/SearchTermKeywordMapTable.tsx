@@ -12,6 +12,7 @@ import type {
 } from '@/types/ppcAnalytics';
 import { getMatchTypeLabel } from '@/utils/matchTypeUtils';
 import { getCurrencyInfo } from '@/utils/currencyUtils';
+import { formatMoney } from '@/utils/formatters';
 import type { CountryScope } from '@/components/dashboard/CountrySwitcher';
 
 interface SearchTermKeywordMapTableProps {
@@ -52,7 +53,7 @@ export const SearchTermKeywordMapTable: React.FC<SearchTermKeywordMapTableProps>
   scope,
 }) => {
   const cur = getCurrencyInfo(scope);
-  const fmtMoney = (v: number) => `${cur.symbol}${new Intl.NumberFormat(cur.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v)}`;
+  const fmtMoney = (v: number) => formatMoney(v, cur);
   const totalPages = Math.ceil(totalCount / pageSize);
 
   const SortableHeader = ({ field, children }: { field: MappingSortField; children: React.ReactNode }) => (

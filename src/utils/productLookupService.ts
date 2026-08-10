@@ -62,36 +62,83 @@ export async function fetchMasterListings(merchantToken: string): Promise<Map<st
   if (perTokenCache.has(merchantToken)) return perTokenCache.get(merchantToken)!;
   if (perTokenPromise.has(merchantToken)) return perTokenPromise.get(merchantToken)!;
 
+  // Vendor (1P) accounts have no seller listings feed at all, so their titles
+  // live in vendor_inventory_data instead. Reading only the seller table left
+  // every vendor product nameless in the ASIN table.
+  const isVendor = merchantToken.startsWith('amzn1.vg');
+
   const p = (async () => {
     const map = new Map<string, MasterProduct>();
     const pageSize = 1000;
-    try {
-      for (let page = 0; page < 60; page++) {
-        const from = page * pageSize;
-        const { data, error } = await supabase
+    const add = (rawAsin: unknown, rawTitle: unknown) => {
+      const asin = String(rawAsin || '').trim();
+      const title = String(rawTitle || '').trim();
+      if (!asin || !title) return;
+      const key = `${merchantToken}|${asin}`;
+      if (!map.has(key)) {
+        map.set(key, { asin, title, price: 0, fbmStock: 0, accountName: merchantToken });
+      }
+    };
+
+    // Only the last fortnight of the listings snapshot is needed — it is a
+    // daily feed, so an unbounded read returns the same title hundreds of times
+    // and blows the 1,000-row response cap before it reaches every ASIN.
+    const since = new Date();
+    since.setDate(since.getDate() - 14);
+    const sinceStr = since.toISOString().split('T')[0];
+
+    const page = async (source: 'vendor' | 'staging' | 'listings', from: number) => {
+      if (source === 'vendor') {
+        return supabase
+          .from('vendor_inventory_data')
+          .select('asin, product_title')
+          .eq('account_name', merchantToken)
+          .not('product_title', 'is', null)
+          .range(from, from + pageSize - 1);
+      }
+      if (source === 'staging') {
+        return supabase
           .from('spapi_listings_stockprice_staging')
           .select('asin, item_name')
           .eq('account_name', merchantToken)
           .not('item_name', 'is', null)
           .range(from, from + pageSize - 1);
+      }
+      return supabase
+        .from('perplexity_all_listings_stockprice_data')
+        .select('asin, item_name')
+        .eq('account_name', merchantToken)
+        .gte('record_date', sinceStr)
+        .not('item_name', 'is', null)
+        .range(from, from + pageSize - 1);
+    };
 
+    const drain = async (source: 'vendor' | 'staging' | 'listings') => {
+      const titleKey = source === 'vendor' ? 'product_title' : 'item_name';
+      for (let i = 0; i < 60; i++) {
+        const { data, error } = await page(source, i * pageSize);
         if (error) {
-          console.error('Failed to fetch spapi_listings_stockprice_staging:', error);
-          break;
+          console.error(`Failed to fetch product titles from ${source}:`, error);
+          return;
         }
-        if (!data || data.length === 0) break;
-
-        for (const row of data) {
-          const asin = (row.asin || '').trim();
-          const title = (row.item_name || '').trim();
-          if (!asin || !title) continue;
-          const key = `${merchantToken}|${asin}`;
-          if (!map.has(key)) {
-            map.set(key, { asin, title, price: 0, fbmStock: 0, accountName: merchantToken });
-          }
+        if (!data || data.length === 0) return;
+        for (const row of data as Array<Record<string, unknown>>) {
+          add(row.asin, row[titleKey]);
         }
+        if (data.length < pageSize) return;
+      }
+    };
 
-        if (data.length < pageSize) break;
+    try {
+      if (isVendor) {
+        await drain('vendor');
+      } else {
+        // spapi_listings_stockprice_staging is the intended source, but it has
+        // RLS on with no SELECT policy, so from the browser it silently returns
+        // nothing — which is why seller ASIN tables showed bare ASINs instead
+        // of names. Fall back to the listings snapshot when it comes back empty.
+        await drain('staging');
+        if (map.size === 0) await drain('listings');
       }
     } catch (error) {
       console.error('Error fetching product listings:', error);
