@@ -8,6 +8,7 @@ import {
 } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
 import { ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { conversionDisplay } from '@/utils/formatters';
 import type { SearchTermData, SortField, SortDirection } from '@/types/ppcAnalytics';
 
 interface SearchTermsTableProps {
@@ -41,11 +42,6 @@ export function SearchTermsTable({
 
   const isValueInvalid = (val: number) => val == null || !Number.isFinite(val);
 
-  // Calculate Conversion Rate as Orders / Clicks * 100
-  const calculateConversionRate = (orders: number, clicks: number) => {
-    if (clicks <= 0) return 0;
-    return (orders / clicks) * 100;
-  };
 
   // Generate Amazon UK search URL
   const getAmazonSearchUrl = (searchTerm: string) => {
@@ -170,7 +166,10 @@ export function SearchTermsTable({
           <TableBody>
             {data.map((row, index) => {
               const calculatedAcos = calculateAcos(row.total_spend, row.total_sales);
-              const conversionRate = calculateConversionRate(row.total_orders, row.total_clicks);
+              // Orders can outnumber clicks under Amazon's attribution window;
+              // that is real, but it is not a conversion rate, so the helper
+              // switches the unit to orders-per-click rather than print >100%.
+              const conv = conversionDisplay(row.total_orders, row.total_clicks, 2);
               return (
                 <TableRow 
                   key={`${row.customer_search_term}-${row.sellername}-${index}`} 
@@ -210,9 +209,13 @@ export function SearchTermsTable({
                   <TableCell className="text-right tabular-nums font-medium">
                     {formatNumber(row.total_orders)}
                   </TableCell>
-                  <TableCell className="text-right">
-                    <span className="inline-block px-2 py-0.5 rounded-md tabular-nums bg-sky-50 text-sky-700 dark:bg-sky-950/50 dark:text-sky-400 text-sm font-medium">
-                      {formatPercentage(conversionRate)}
+                  <TableCell className="text-right" title={conv.note}>
+                    <span className={`inline-block px-2 py-0.5 rounded-md tabular-nums text-sm font-medium ${
+                      conv.value == null
+                        ? 'text-muted-foreground'
+                        : 'bg-sky-50 text-sky-700 dark:bg-sky-950/50 dark:text-sky-400'
+                    }`}>
+                      {conv.text}
                     </span>
                   </TableCell>
                   <TableCell className="text-right">

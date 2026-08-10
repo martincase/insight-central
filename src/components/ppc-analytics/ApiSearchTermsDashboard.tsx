@@ -13,7 +13,7 @@ import { format as formatDate, parseISO } from 'date-fns';
 import { getCurrentDateRange } from '@/utils/dataProcessor';
 import type { DateFilter } from '@/types/dashboard';
 import { getCurrencyInfo } from '@/utils/currencyUtils';
-import { formatMoney } from '@/utils/formatters';
+import { conversionDisplay, formatMoney } from '@/utils/formatters';
 import type { CountryScope } from '@/components/dashboard/CountrySwitcher';
 
 const formatDateFriendly = (dateStr: string) => {
@@ -308,9 +308,15 @@ export function ApiSearchTermsDashboard({ accountName, dateFilter = 'last-7-days
 
   // CSV export
   const exportCsv = () => {
-    const headers = ['Search Term', 'Keyword', 'Match Type', 'Campaign', 'Impressions', 'Clicks', 'CTR %', 'CPC', 'Spend', 'Sales', 'Orders', 'ACoS %', 'ROAS', 'Conv Rate %'];
+    // Conv Rate % is left blank where orders exceed clicks — the ratio is real
+    // but it is not a rate. The honest figure is carried by Orders per Click,
+    // which is exported for every row so nothing is lost to the cap.
+    const headers = ['Search Term', 'Keyword', 'Match Type', 'Campaign', 'Impressions', 'Clicks', 'CTR %', 'CPC', 'Spend', 'Sales', 'Orders', 'ACoS %', 'ROAS', 'Conv Rate %', 'Orders per Click'];
     const rows = filteredData.map(r => {
-      const cvr = r.clicks && r.clicks > 0 ? ((r.orders_7d || 0) / r.clicks * 100).toFixed(2) : '0';
+      const clicks = Number(r.clicks) || 0;
+      const orders = Number(r.orders_7d) || 0;
+      const perClick = clicks > 0 ? orders / clicks : null;
+      const cvr = perClick == null ? 'N/A' : perClick > 1 ? '>100' : (perClick * 100).toFixed(2);
       return [
         `"${r.search_term.replace(/"/g, '""')}"`,
         `"${(r.keyword || '').replace(/"/g, '""')}"`,
@@ -327,7 +333,8 @@ export function ApiSearchTermsDashboard({ accountName, dateFilter = 'last-7-days
         // as flawless efficiency, so the CSV says N/A exactly as the table does.
         (r.sales_7d || 0) > 0 ? (r.acos_7d || 0).toFixed(2) : 'N/A',
         (r.sales_7d || 0) > 0 ? (r.roas_7d || 0).toFixed(2) : 'N/A',
-        cvr
+        cvr,
+        perClick == null ? 'N/A' : perClick.toFixed(4)
       ].join(',');
     });
     const csv = [headers.join(','), ...rows].join('\n');
@@ -464,10 +471,15 @@ export function ApiSearchTermsDashboard({ accountName, dateFilter = 'last-7-days
                   <span className="text-xs font-medium text-emerald-600">Best Converting</span>
                 </div>
                 <p className="text-sm font-semibold truncate">{highlights.bestConverting.search_term}</p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {highlights.bestConverting.orders_7d} orders / {highlights.bestConverting.clicks} clicks
-                  ({((highlights.bestConverting.orders_7d || 0) / (highlights.bestConverting.clicks || 1) * 100).toFixed(1)}% CVR)
-                </p>
+                {(() => {
+                  const conv = conversionDisplay(highlights.bestConverting.orders_7d, highlights.bestConverting.clicks);
+                  return (
+                    <p className="text-xs text-muted-foreground mt-1" title={conv.note}>
+                      {highlights.bestConverting.orders_7d} orders / {highlights.bestConverting.clicks} clicks
+                      {' '}({conv.exceedsCeiling ? conv.text : `${conv.text} CVR`})
+                    </p>
+                  );
+                })()}
               </div>
             )}
             {highlights.highestRoas && (
@@ -579,7 +591,7 @@ export function ApiSearchTermsDashboard({ accountName, dateFilter = 'last-7-days
                     </TableRow>
                   ) : (
                     pageData.map((r, i) => {
-                      const cvr = r.clicks && r.clicks > 0 ? ((r.orders_7d || 0) / r.clicks * 100) : 0;
+                      const conv = conversionDisplay(r.orders_7d, r.clicks);
                       const acosVal = r.acos_7d;
                       const roasVal = r.roas_7d;
                       const isAcosInvalid = acosVal == null || !Number.isFinite(acosVal) || acosVal > 9999 || ((r.spend || 0) > 0 && (r.sales_7d || 0) === 0);
@@ -605,7 +617,16 @@ export function ApiSearchTermsDashboard({ accountName, dateFilter = 'last-7-days
                           <TableCell className="text-right tabular-nums font-medium">{fmtMoney(r.spend)}</TableCell>
                           <TableCell className="text-right tabular-nums font-medium">{fmtMoney(r.sales_7d)}</TableCell>
                           <TableCell className="text-right tabular-nums hidden lg:table-cell">{r.orders_7d || 0}</TableCell>
-                          <TableCell className="text-right tabular-nums hidden md:table-cell">{cvr.toFixed(1)}%</TableCell>
+                          {/* Two orders really can follow one click, so above
+                              100% the cell switches unit to orders-per-click
+                              instead of printing an impossible rate. */}
+                          <TableCell
+                            className={`text-right tabular-nums hidden md:table-cell ${conv.value == null ? 'text-muted-foreground' : ''}`}
+                            title={conv.note}
+                          >
+                            {conv.text}
+                            {conv.exceedsCeiling && <span className="text-muted-foreground ml-0.5">*</span>}
+                          </TableCell>
                           <TableCell className={`text-right tabular-nums ${acosColor}`}>
                             {isAcosInvalid ? 'N/A' : `${acosVal!.toFixed(1)}%`}
                           </TableCell>
@@ -624,6 +645,14 @@ export function ApiSearchTermsDashboard({ accountName, dateFilter = 'last-7-days
               ← Scroll horizontally for more columns →
             </div>
           </div>
+        )}
+
+        {!isLoading && !error && pageData.some(r => (r.clicks || 0) > 0 && (r.orders_7d || 0) > (r.clicks || 0)) && (
+          <p className="text-[11px] text-muted-foreground -mt-3">
+            * More orders than clicks. Amazon attributes an order to a click for days afterwards
+            and one click can carry more than one order, so Conv % is shown as orders per click —
+            a conversion rate cannot exceed 100%.
+          </p>
         )}
 
         {/* Pagination */}

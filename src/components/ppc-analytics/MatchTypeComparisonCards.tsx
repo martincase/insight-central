@@ -5,7 +5,7 @@ import { Target, MousePointerClick, TrendingUp, PoundSterling } from 'lucide-rea
 import type { MatchTypeSummary } from '@/types/ppcAnalytics';
 import { getMatchTypeLabel } from '@/utils/matchTypeUtils';
 import { getCurrencyInfo } from '@/utils/currencyUtils';
-import { formatAcos, formatMoney, isAcosDefined } from '@/utils/formatters';
+import { conversionDisplay, formatAcos, formatMoney, isAcosDefined } from '@/utils/formatters';
 import type { CountryScope } from '@/components/dashboard/CountrySwitcher';
 
 interface MatchTypeComparisonCardsProps {
@@ -40,6 +40,9 @@ export const MatchTypeComparisonCards: React.FC<MatchTypeComparisonCardsProps> =
         const mappingsPct = totalMappings > 0 ? (summary.total_mappings / totalMappings) * 100 : 0;
         const mt = getMatchTypeLabel(summary.match_type);
         const acosDefined = isAcosDefined(summary.total_spend, summary.total_sales);
+        // Rebuilt from the summed orders and clicks so the card obeys the same
+        // ceiling as the rows beneath it, rather than printing a stored ratio.
+        const conv = conversionDisplay(summary.total_orders, summary.total_clicks);
 
         return (
           <Card
@@ -104,10 +107,18 @@ export const MatchTypeComparisonCards: React.FC<MatchTypeComparisonCardsProps> =
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-muted-foreground flex items-center gap-1">
                     <TrendingUp className="h-3 w-3" />
-                    Conv. Rate
+                    {conv.exceedsCeiling ? 'Orders / click' : 'Conv. Rate'}
                   </span>
-                  <span className={`font-medium ${summary.conversion_rate > 10 ? 'text-emerald-500' : summary.conversion_rate > 5 ? 'text-foreground' : 'text-amber-500'}`}>
-                    {summary.conversion_rate.toFixed(1)}%
+                  <span
+                    title={conv.note}
+                    className={`font-medium ${
+                      conv.value == null ? 'text-muted-foreground'
+                        : conv.value > 10 ? 'text-emerald-500'
+                        : conv.value > 5 ? 'text-foreground'
+                        : 'text-amber-500'
+                    }`}
+                  >
+                    {conv.exceedsCeiling ? conv.text.replace(' per click', '') : conv.text}
                   </span>
                 </div>
 

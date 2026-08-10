@@ -17,6 +17,12 @@ interface AlertConfig {
   enabled_alert_types: string[];
 }
 
+/**
+ * Below this many sessions a day's conversion rate is noise, and a swing
+ * between two thin days is not a story worth waking a client for.
+ */
+const MIN_SESSIONS_FOR_CONVERSION = 20;
+
 interface Account {
   id: string;
   account_name: string;
@@ -118,44 +124,64 @@ Deno.serve(async (req) => {
       }
       
       // Check Conversion Rate threshold
+      //
+      // This must read conversion the way the dashboard card does, and it did
+      // not. It used to take daily_asin_data.conversion_rate — a PER-ASIN ratio
+      // that carries values like 140% and 200% because it is units over page
+      // views — and average it weighted by SALES. Mahi Naturals came out at
+      // 74.8% on 2 Aug that way, while the card, the heatmap and every daily
+      // cell on the same screen showed 22.15%. Two figures for one thing, and
+      // the alert quoted the one that appears nowhere on the page.
+      //
+      // rpc_metrics_daily_country is the single definition the KPI cards use:
+      // Σunits ÷ Σsessions, sessions recovered from unit_session_percentage,
+      // resolved by BRAND so a scope means the same thing here as on screen.
       if (config.enabled_alert_types?.includes('conversion_rate')) {
-        const { data: yesterdayData, error: yesterdayError } = await supabase
-          .from('daily_asin_data')
-          .select('conversion_rate, sales')
-          .eq('merchant_token', account.merchant_token)
-          .eq('record_date', yesterdayStr);
-        
-        const { data: dayBeforeData, error: dayBeforeError } = await supabase
-          .from('daily_asin_data')
-          .select('conversion_rate, sales')
-          .eq('merchant_token', account.merchant_token)
-          .eq('record_date', dayBeforeStr);
-        
-        if (!yesterdayError && !dayBeforeError && yesterdayData && dayBeforeData && 
-            yesterdayData.length > 0 && dayBeforeData.length > 0) {
-          
-          // Calculate weighted average conversion rates
-          const calcWeightedAvg = (data: any[]) => {
-            let totalSales = 0;
-            let weightedCR = 0;
-            
-            for (const item of data) {
-              const sales = Number(item.sales) || 0;
-              const cr = Number(item.conversion_rate) || 0;
-              totalSales += sales;
-              weightedCR += cr * sales;
-            }
-            
-            return totalSales > 0 ? weightedCR / totalSales : 0;
+        // accounts_master.merchant_token is brand_marketplaces.sales_account_key.
+        const { data: market } = await supabase
+          .from('brand_marketplaces')
+          .select('selling_partner_id, country_code')
+          .eq('sales_account_key', account.merchant_token)
+          .eq('enabled', true)
+          .maybeSingle();
+
+        if (!market) {
+          console.log(`- ${account.account_name}: no brand_marketplaces scope, conversion check skipped`);
+        } else {
+          const readConversion = async (day: string): Promise<number | null> => {
+            const { data, error } = await supabase.rpc('rpc_metrics_daily_country', {
+              p_spid: market.selling_partner_id,
+              p_scope: market.country_code,
+              p_start: day,
+              p_end: day,
+            });
+            if (error || !data || data.length === 0) return null;
+            const row = data[0] as { conversion: number | null; sessions: number | null; has_sessions: boolean };
+            // A day the feed has not delivered yet has no denominator. That is
+            // absence, not a conversion rate of zero — asserting 0.0% is what
+            // produced "dropped 100.0% ... to 0.0%" on an account running at
+            // 29%. No sessions, no reading, no alert.
+            if (!row.has_sessions) return null;
+            const sessions = Number(row.sessions);
+            if (!Number.isFinite(sessions) || sessions < MIN_SESSIONS_FOR_CONVERSION) return null;
+            const conversion = row.conversion == null ? null : Number(row.conversion);
+            return Number.isFinite(conversion as number) ? (conversion as number) : null;
           };
-          
-          const yesterdayCR = calcWeightedAvg(yesterdayData);
-          const dayBeforeCR = calcWeightedAvg(dayBeforeData);
-          
-          if (dayBeforeCR > 0) {
+
+          const [yesterdayCR, dayBeforeCR] = await Promise.all([
+            readConversion(yesterdayStr),
+            readConversion(dayBeforeStr),
+          ]);
+
+          if (yesterdayCR == null || dayBeforeCR == null) {
+            console.log(
+              `- ${account.account_name}: conversion check skipped, ` +
+              `${yesterdayStr}=${yesterdayCR ?? 'no data'} ${dayBeforeStr}=${dayBeforeCR ?? 'no data'}`,
+            );
+          } else if (dayBeforeCR > 0) {
             const percentChange = ((yesterdayCR - dayBeforeCR) / dayBeforeCR) * 100;
             const threshold = config.thresholds?.conversion_rate_drop || 25;
-            
+
             if (percentChange < -threshold) {
               // Check if alert already exists
               const { data: existing } = await supabase
@@ -165,7 +191,7 @@ Deno.serve(async (req) => {
                 .eq('alert_type', 'conversion_rate')
                 .eq('detection_date', yesterdayStr)
                 .maybeSingle();
-              
+
               if (!existing) {
                 const { error: insertError } = await supabase
                   .from('client_threshold_alerts')
@@ -178,13 +204,15 @@ Deno.serve(async (req) => {
                     threshold_value: threshold,
                     detection_date: yesterdayStr,
                     message: `Conversion rate dropped ${Math.abs(percentChange).toFixed(1)}% (from ${dayBeforeCR.toFixed(1)}% to ${yesterdayCR.toFixed(1)}%), exceeding your ${threshold}% drop threshold`,
-                    metadata: { 
-                      previous_value: dayBeforeCR, 
+                    metadata: {
+                      previous_value: dayBeforeCR,
                       percent_change: percentChange,
-                      asins_checked: yesterdayData.length 
+                      source: 'rpc_metrics_daily_country',
+                      basis: 'units ÷ sessions, same as the dashboard KPI card',
+                      scope: `${market.selling_partner_id}/${market.country_code}`,
                     }
                   });
-                
+
                 if (!insertError) {
                   alertsGenerated.push({ account: account.account_name, type: 'conversion_rate', change: percentChange });
                   console.log(`✓ Conversion Rate alert created for ${account.account_name}`);

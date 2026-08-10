@@ -29,13 +29,20 @@ export const formatMoney = (
   if (!Number.isFinite(n)) return '—';
 
   // Decide the sign from the *rounded* figure, so -0.001 at 0dp is not "-£0".
+  //
+  // Round the MAGNITUDE, then re-apply the sign. JS Math.round breaks ties
+  // towards +∞, so Math.round(-5374.5) is -5374 while Intl — which every other
+  // money string in the app used to go through — breaks ties away from zero and
+  // prints -5,375. Rounding the absolute value keeps the two in step, so moving
+  // a call site onto this helper changes where the minus sits and nothing else.
   const factor = 10 ** decimals;
-  const rounded = Math.round(n * factor) / factor;
+  const magnitude = Math.round(Math.abs(n) * factor) / factor;
+  const rounded = n < 0 ? -magnitude : magnitude;
 
   const digits = new Intl.NumberFormat(currency.locale, {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
-  }).format(Math.abs(rounded));
+  }).format(magnitude);
 
   return `${rounded < 0 ? '-' : ''}${currency.symbol}${digits}`;
 };
@@ -97,6 +104,84 @@ export const formatAcos = (
   }
   return `${((Number(spend) / Number(sales)) * 100).toFixed(decimals)}%`;
 };
+
+/**
+ * Advertising conversion rate — orders ÷ clicks.
+ *
+ * Amazon attributes an order to a click for up to 7 (or 14) days, and one click
+ * can carry more than one order, so this ratio genuinely resolves above 1. The
+ * DATA is right; calling it a "conversion rate" is what is wrong, because a
+ * rate is a share of a population and cannot exceed 100%. NI Candle's ASIN
+ * B0GZ4X2HQY (1 click, 2 orders) printed "Conv % 200.0%", which a client reads
+ * as a broken dashboard rather than as a real attribution quirk.
+ *
+ * So above the ceiling the figure is shown in the unit that is actually true —
+ * orders per click, e.g. "2.00 per click" — rather than clamped to 100% or
+ * withheld. The real number stays on the screen; only the unit changes, and
+ * `exceedsCeiling` lets the call site mark it and explain itself. No clicks
+ * means no denominator, which is a dash, never "0.0%".
+ */
+export const CONVERSION_CEILING_PCT = 100;
+
+export interface ConversionDisplay {
+  /** What to print. */
+  text: string;
+  /** The true ratio as a percentage; null where there is no denominator. */
+  value: number | null;
+  /** Orders exceeded clicks, so the figure is not a conversion rate. */
+  exceedsCeiling: boolean;
+  /** Long-form explanation, for a title/tooltip. */
+  note: string;
+}
+
+export const conversionDisplay = (
+  orders: number | null | undefined,
+  clicks: number | null | undefined,
+  decimals: number = 1,
+): ConversionDisplay => {
+  const o = Number(orders);
+  const c = Number(clicks);
+
+  if (!Number.isFinite(c) || c <= 0) {
+    return {
+      text: '—',
+      value: null,
+      exceedsCeiling: false,
+      note: 'No clicks, so there is no conversion rate to report.',
+    };
+  }
+
+  const safeOrders = Number.isFinite(o) ? o : 0;
+  const pct = (safeOrders / c) * 100;
+
+  if (pct > CONVERSION_CEILING_PCT) {
+    const perClick = safeOrders / c;
+    return {
+      text: `${perClick.toFixed(2)} per click`,
+      value: pct,
+      exceedsCeiling: true,
+      note:
+        `${safeOrders.toLocaleString()} orders attributed to ${c.toLocaleString()} click` +
+        `${c === 1 ? '' : 's'} — ${perClick.toFixed(2)} orders per click. Amazon attributes an ` +
+        'order to a click for days afterwards, and one click can carry more than one order, ' +
+        'so this cannot be expressed as a conversion rate.',
+    };
+  }
+
+  return {
+    text: `${pct.toFixed(decimals)}%`,
+    value: pct,
+    exceedsCeiling: false,
+    note: `${safeOrders.toLocaleString()} orders from ${c.toLocaleString()} clicks.`,
+  };
+};
+
+/** Convenience wrapper for call sites that only need the string (e.g. CSV). */
+export const formatConversionRate = (
+  orders: number | null | undefined,
+  clicks: number | null | undefined,
+  decimals: number = 1,
+): string => conversionDisplay(orders, clicks, decimals).text;
 
 export const formatNumber = (value: number): string => {
   if (value >= 1000000) {

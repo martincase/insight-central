@@ -11,6 +11,7 @@ import { format } from 'date-fns';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer } from 'recharts';
 import { InfoTooltip } from '@/components/common/InfoTooltip';
 import { getCurrencyInfo } from '@/utils/currencyUtils';
+import { formatMoney } from '@/utils/formatters';
 import type { CountryScope } from '@/components/dashboard/CountrySwitcher';
 
 interface BrandAnalyticsDashboardProps {
@@ -307,7 +308,8 @@ export function BrandAnalyticsDashboard({ accountName, scope }: BrandAnalyticsDa
   };
 
   const cur = getCurrencyInfo(scope);
-  const fmtCurrency = (v: number | null) => v != null ? `${cur.symbol}${new Intl.NumberFormat(cur.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v)}` : '—';
+  // Shared helper: keeps the minus in front of the symbol ("-£283", not "£-283").
+  const fmtCurrency = (v: number | null) => (v != null ? formatMoney(v, cur, 2) : '—');
 
   if (isLoading) {
     return (

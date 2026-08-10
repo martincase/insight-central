@@ -1,5 +1,6 @@
 import { Card, CardContent } from '@/components/ui/card';
 import { TrendingUp, ShoppingCart, Target } from 'lucide-react';
+import { conversionDisplay } from '@/utils/formatters';
 import type { SearchTermData } from '@/types/ppcAnalytics';
 
 interface SearchTermInsightCardsProps {
@@ -27,9 +28,16 @@ export function SearchTermInsightCards({ data, isLoading }: SearchTermInsightCar
   }
 
   // Calculate insights
-  const bestConverting = [...data]
-    .filter(d => d.total_clicks > 0)
-    .sort((a, b) => (b.total_orders / b.total_clicks) - (a.total_orders / a.total_clicks))[0];
+  // A term with one click and one order is 100% "converting" and tells you
+  // nothing, so the headline prefers terms with enough clicks to mean
+  // something, falling back to any clicked term when none clears the bar.
+  const MIN_CLICKS_FOR_HEADLINE = 4;
+  const byConversion = (a: SearchTermData, b: SearchTermData) =>
+    (b.total_orders / b.total_clicks) - (a.total_orders / a.total_clicks);
+  const clicked = [...data].filter(d => d.total_clicks > 0);
+  const bestConverting =
+    clicked.filter(d => d.total_clicks >= MIN_CLICKS_FOR_HEADLINE).sort(byConversion)[0]
+    ?? clicked.sort(byConversion)[0];
 
   const highestRoas = [...data]
     .filter(d => d.roas > 0)
@@ -51,10 +59,12 @@ export function SearchTermInsightCards({ data, isLoading }: SearchTermInsightCar
       iconBg: 'bg-emerald-500/20',
       iconColor: 'text-emerald-600',
       searchTerm: bestConverting?.customer_search_term || 'N/A',
-      metric: bestConverting 
-        ? `${((bestConverting.total_orders / bestConverting.total_clicks) * 100).toFixed(1)}%` 
+      metric: bestConverting
+        ? conversionDisplay(bestConverting.total_orders, bestConverting.total_clicks).text
         : '-',
-      metricLabel: 'conversion rate',
+      metricLabel: bestConverting && conversionDisplay(bestConverting.total_orders, bestConverting.total_clicks).exceedsCeiling
+        ? 'orders per click (more orders than clicks)'
+        : 'conversion rate',
       subtext: bestConverting 
         ? `${bestConverting.total_orders} orders from ${bestConverting.total_clicks} clicks` 
         : ''
