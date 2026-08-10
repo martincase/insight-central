@@ -1,5 +1,8 @@
 import React, { useMemo } from 'react';
 import { getMatchTypeFriendlyName } from '@/utils/matchTypeUtils';
+import { getCurrencyInfo } from '@/utils/currencyUtils';
+import { formatMoney } from '@/utils/formatters';
+import type { CountryScope } from '@/components/dashboard/CountrySwitcher';
 
 interface MatchTypeTotals {
   name: string;
@@ -11,6 +14,7 @@ interface MatchTypeTotals {
 interface MatchTypePieChartProps {
   matchTypeTotals: MatchTypeTotals[];
   metric?: 'spend' | 'sales';
+  scope?: CountryScope;
 }
 
 const MATCH_TYPE_COLORS: Record<string, string> = {
@@ -23,7 +27,9 @@ const MATCH_TYPE_COLORS: Record<string, string> = {
 
 const FALLBACK_COLORS = ['#06b6d4', '#3b82f6', '#22c55e', '#f97316', '#8b5cf6', '#ec4899'];
 
-export function MatchTypePieChart({ matchTypeTotals, metric = 'sales' }: MatchTypePieChartProps) {
+export function MatchTypePieChart({ matchTypeTotals, metric = 'sales', scope }: MatchTypePieChartProps) {
+  // Was a hard-coded £ with no thousands separator, so £2,020 printed as £2020.
+  const cur = getCurrencyInfo(scope);
   const chartData = useMemo(() => {
     return matchTypeTotals
       .map((item, i) => {
@@ -89,7 +95,7 @@ export function MatchTypePieChart({ matchTypeTotals, metric = 'sales' }: MatchTy
                   <span style={{ fontSize: 13, fontWeight: 500, color: 'inherit' }}>{d.label}</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-                  <span style={{ color: '#6b7280' }}>£{d.value.toFixed(0)}</span>
+                  <span style={{ color: '#6b7280' }}>{formatMoney(d.value, cur, 0)}</span>
                   <span style={{ fontWeight: 600, color: 'inherit', minWidth: 36, textAlign: 'right' }}>
                     {pct.toFixed(0)}%
                   </span>

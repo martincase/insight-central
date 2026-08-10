@@ -6,6 +6,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { getCountryName, getCountryFlagImage } from '@/utils/countryUtils';
 import { getCurrencyInfo } from '@/utils/currencyUtils';
+import { formatMoney } from '@/utils/formatters';
 import { CountryScope } from './CountrySwitcher';
 import { DateFilter } from '@/types/dashboard';
 import { getCurrentDateRange } from '@/utils/dataProcessor';
@@ -101,7 +102,7 @@ export function FeeDetailDialog({
   const isRollup = isRollupScope(scope);
   const cur = getCurrencyInfo(scope);
   const fmtMoney = (v: number) =>
-    `${cur.symbol}${new Intl.NumberFormat(cur.locale, { maximumFractionDigits: 0 }).format(v ?? 0)}`;
+    formatMoney(v ?? 0, cur, 0);
 
   useEffect(() => {
     if (!open || !item) return;

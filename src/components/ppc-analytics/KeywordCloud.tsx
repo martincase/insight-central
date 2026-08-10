@@ -1,13 +1,18 @@
 import React, { useMemo } from 'react';
 import type { KeywordThemeData } from '@/types/ppcAnalytics';
+import { getCurrencyInfo } from '@/utils/currencyUtils';
+import { formatAcos, formatMoney } from '@/utils/formatters';
+import type { CountryScope } from '@/components/dashboard/CountrySwitcher';
 
 interface KeywordCloudProps {
   data: KeywordThemeData[];
   onKeywordClick?: (keyword: string) => void;
   maxKeywords?: number;
+  scope?: CountryScope;
 }
 
-export function KeywordCloud({ data, onKeywordClick, maxKeywords = 50 }: KeywordCloudProps) {
+export function KeywordCloud({ data, onKeywordClick, maxKeywords = 50, scope }: KeywordCloudProps) {
+  const cur = getCurrencyInfo(scope);
   const cloudData = useMemo(() => {
     // Sort by sales and take top keywords
     const sorted = [...data]
@@ -64,7 +69,7 @@ export function KeywordCloud({ data, onKeywordClick, maxKeywords = 50 }: Keyword
             px-2 py-1 rounded hover:bg-muted/50
           `}
           style={{ fontSize: `${item.fontSize}px` }}
-          title={`Sales: £${item.total_sales.toFixed(2)} | ACOS: ${item.acos.toFixed(1)}% | ${item.match_type}`}
+          title={`Sales: ${formatMoney(item.total_sales, cur)} | ACOS: ${formatAcos(item.total_spend, item.total_sales)} | ${item.match_type}`}
         >
           {item.keyword_text}
         </button>

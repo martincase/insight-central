@@ -20,7 +20,7 @@ export const AsinStockoutImpactCard: React.FC<Props> = ({ asin, merchantToken })
 
   const cur = getCurrencyFromMerchantToken(merchantToken);
   const fmtMoney = (v: number | null) =>
-    v == null ? '—' : `${cur.symbol}${new Intl.NumberFormat(cur.locale, { maximumFractionDigits: 0 }).format(v)}`;
+    v == null ? '—' : formatMoney(v, cur, 0);
 
   useEffect(() => {
     let active = true;

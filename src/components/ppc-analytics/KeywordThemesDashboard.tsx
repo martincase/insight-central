@@ -75,7 +75,7 @@ export function KeywordThemesDashboard({ sellerFilter, scope }: KeywordThemesDas
         row.total_spend.toFixed(2),
         row.total_sales.toFixed(2),
         row.total_orders,
-        row.acos.toFixed(2)
+        row.total_sales > 0 ? row.acos.toFixed(2) : 'N/A'
       ].join(','))
     ].join('\n');
 
@@ -141,7 +141,7 @@ export function KeywordThemesDashboard({ sellerFilter, scope }: KeywordThemesDas
               <CardDescription className="text-xs">Size = Sales Volume, Color = ACOS (Green = Low, Red = High)</CardDescription>
             </CardHeader>
             <CardContent>
-              <KeywordCloud data={data} onKeywordClick={handleKeywordClick} maxKeywords={40} />
+              <KeywordCloud data={data} onKeywordClick={handleKeywordClick} maxKeywords={40} scope={scope} />
             </CardContent>
           </Card>
 
@@ -152,7 +152,7 @@ export function KeywordThemesDashboard({ sellerFilter, scope }: KeywordThemesDas
               <CardDescription className="text-xs">Sales breakdown by match type</CardDescription>
             </CardHeader>
             <CardContent>
-              <MatchTypePieChart matchTypeTotals={matchTypeTotals} metric="sales" />
+              <MatchTypePieChart matchTypeTotals={matchTypeTotals} metric="sales" scope={scope} />
             </CardContent>
           </Card>
         </div>

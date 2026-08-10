@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import type { KeywordThemeData, KeywordSortField, SortDirection } from '@/types/ppcAnalytics';
 import { getMatchTypeLabel } from '@/utils/matchTypeUtils';
 import { getCurrencyInfo } from '@/utils/currencyUtils';
+import { formatAcos, formatMoney, isAcosDefined } from '@/utils/formatters';
 import type { CountryScope } from '@/components/dashboard/CountrySwitcher';
 
 interface KeywordThemesTableProps {
@@ -32,7 +33,7 @@ export function KeywordThemesTable({
   scope,
 }: KeywordThemesTableProps) {
   const cur = getCurrencyInfo(scope);
-  const formatCurrency = (value: number) => `${cur.symbol}${new Intl.NumberFormat(cur.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)}`;
+  const formatCurrency = (value: number) => formatMoney(value, cur);
   const formatPercent = (value: number) => `${value.toFixed(2)}%`;
   const formatNumber = (value: number) => value.toLocaleString();
 
@@ -131,8 +132,15 @@ export function KeywordThemesTable({
                 <TableCell className="text-right">{formatPercent(row.ctr)}</TableCell>
                 <TableCell className="text-right">{formatCurrency(row.total_spend)}</TableCell>
                 <TableCell className="text-right font-medium">{formatCurrency(row.total_sales)}</TableCell>
-                <TableCell className={`text-right font-medium ${getAcosColor(row.acos)}`}>
-                  {formatPercent(row.acos)}
+                {/* Spend against zero sales means ACOS is undefined. Printing
+                    0.00% there reads as flawless efficiency — the opposite of
+                    the truth — so it shows N/A, as the PPC search-term table does. */}
+                <TableCell className={`text-right font-medium ${
+                  isAcosDefined(row.total_spend, row.total_sales) ? getAcosColor(row.acos) : 'text-muted-foreground'
+                }`}>
+                  {isAcosDefined(row.total_spend, row.total_sales)
+                    ? formatPercent(row.acos)
+                    : formatAcos(row.total_spend, row.total_sales)}
                 </TableCell>
               </TableRow>
             ))

@@ -11,6 +11,7 @@ import { isRollupScope, scopeArea } from '@/utils/scope';
 import { DateFilter } from '@/types/dashboard';
 import { getCurrentDateRange } from '@/utils/dataProcessor';
 import { getCurrencyInfo } from '@/utils/currencyUtils';
+import { formatMoney } from '@/utils/formatters';
 import { useChartReady } from '@/hooks/useChartReady';
 
 interface Props {
@@ -59,7 +60,7 @@ export function SalesTrendCard({ spid, scope, dateFilter, customDateRange, onDri
   const wxCountryName = getCountryName(wxCountry);
   const cur = getCurrencyInfo(scope);
   const fmtMoney = (v: number) =>
-    `${cur.symbol}${new Intl.NumberFormat(cur.locale, { maximumFractionDigits: 0 }).format(v ?? 0)}`;
+    formatMoney(v ?? 0, cur, 0);
 
   useEffect(() => {
     let cancelled = false;
