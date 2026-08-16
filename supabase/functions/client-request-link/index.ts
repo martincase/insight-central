@@ -128,6 +128,14 @@ Deno.serve(async (req: Request) => {
     const body = await req.json().catch(() => ({}));
     const email = String(body?.email ?? "").trim().toLowerCase();
 
+    // Which dashboard was the reader actually looking at? The refusal page passes
+    // its own share code. We only ever send a link for THAT dashboard.
+    //
+    // Without this, asking from Portwest's page while whitelisted against AirCraft
+    // posted back an AirCraft link — technically "your entitlements", but nobody
+    // reads it that way. You ask about one dashboard, you get that one or nothing.
+    const requestedShare = String(body?.share_code ?? "").trim();
+
     // A malformed address never reaches the database and never changes the reply.
     if (!looksLikeEmail(email)) return neutral();
 
@@ -198,8 +206,18 @@ Deno.serve(async (req: Request) => {
       return neutral();
     }
 
+    // Narrow to the dashboard that was asked about. An address entitled to several
+    // accounts still only gets the one it requested; the others are reachable from
+    // their own pages. Falls back to everything the address is entitled to only when
+    // the caller supplied no context at all.
+    const scoped = requestedShare
+      ? (accounts ?? []).filter(
+          (a) => String(a.share_code ?? "").trim().toLowerCase() === requestedShare.toLowerCase(),
+        )
+      : (accounts ?? []);
+
     const links: LinkOut[] = [];
-    for (const acc of accounts ?? []) {
+    for (const acc of scoped) {
       // A closed account and a link-less account both get silently skipped —
       // rpc_redeem_link_token would refuse them anyway, so a link would only be
       // a promise the page then breaks.

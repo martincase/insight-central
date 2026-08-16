@@ -22,7 +22,12 @@ import { CheckCircle2 } from 'lucide-react';
 /** Kept identical to the edge function's own reply. */
 const CONFIRMATION = "If your address is on our list, we've sent you a link. Please check your inbox.";
 
-export const RequestDashboardLink = () => {
+interface RequestDashboardLinkProps {
+  /** Share code of the dashboard being asked about; scopes what we send back. */
+  shareCode?: string;
+}
+
+export const RequestDashboardLink = ({ shareCode }: RequestDashboardLinkProps = {}) => {
   const [email, setEmail] = useState('');
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
@@ -32,7 +37,12 @@ export const RequestDashboardLink = () => {
     if (sending) return;
     setSending(true);
     try {
-      await supabase.functions.invoke('client-request-link', { body: { email: email.trim() } });
+      // shareCode scopes the request to the dashboard actually being asked about,
+      // so an address entitled to several accounts is never posted a link to a
+      // different client's dashboard than the one in front of them.
+      await supabase.functions.invoke('client-request-link', {
+        body: { email: email.trim(), share_code: shareCode ?? '' },
+      });
     } catch {
       // Swallowed on purpose — see the note above. A network failure must look
       // exactly like a success, or the difference becomes the signal.

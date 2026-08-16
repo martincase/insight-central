@@ -833,7 +833,7 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
             {/* Self-service remedy. The form's confirmation never reveals whether
                 the address was recognised, so the hello@ line stays underneath
                 as the route for anyone we do not hold an address for. */}
-            <RequestDashboardLink />
+            <RequestDashboardLink shareCode={shareId} />
             <p className="mt-4 text-sm text-gray-500">
               If nothing arrives, email us at{' '}
               <a href="mailto:hello@martincase.co.uk" className="text-blue-600 hover:text-blue-800 underline">
