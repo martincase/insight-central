@@ -3,10 +3,16 @@ import { ChevronDown, Info } from 'lucide-react';
 import { format } from 'date-fns';
 import { supabase } from '@/integrations/supabase/client';
 
+/** How the rate on screen was arrived at. Mirrors rpc_fx_basis. */
+type FxBasis = 'period_average' | 'spot_asof' | 'latest_spot';
+
 interface FxRow {
   quote: string;
   rate: number;
   rateDate: string;
+  basis: FxBasis | null;
+  /** How many published rates the average is built from. */
+  observations: number | null;
   source: string | null;
 }
 
@@ -16,6 +22,13 @@ interface ReportingBasisNoteProps {
    * page. Empty means nothing is converted and we say so explicitly.
    */
   convertedCurrencies?: string[];
+  /**
+   * The period on screen, as yyyy-MM-dd. The rate depends on it — July's figures
+   * are converted at July's average — so the note must be told which window it is
+   * describing rather than reaching for today's spot.
+   */
+  periodStart?: string;
+  periodEnd?: string;
   className?: string;
 }
 
@@ -30,13 +43,39 @@ const formatRateDate = (iso: string): string => {
 };
 
 /**
+ * "the July 2026 average" for a whole calendar month, "the period average" for
+ * anything else — the phrase the client email footer uses, so the two read alike.
+ */
+const describePeriod = (start?: string, end?: string): string => {
+  if (!start || !end) return 'the period average';
+  const [sy, sm, sd] = start.split('-').map(Number);
+  const [ey, em, ed] = end.split('-').map(Number);
+  if (!sy || !ey) return 'the period average';
+  const wholeMonth =
+    sy === ey && sm === em && sd === 1 && ed === new Date(ey, em, 0).getDate();
+  if (!wholeMonth) return 'the period average';
+  return `the ${format(new Date(sy, sm - 1, 1), 'MMMM yyyy')} average`;
+};
+
+/**
  * Compact, collapsible statement of what the numbers on this page actually are:
  * revenue basis, VAT treatment, ad attribution windows, period basis and the exact
- * FX rate (with its date) used for any GBP conversion.
+ * FX rate — with its basis and date — used for any GBP conversion.
+ *
+ * The FX line is not decoration. The monthly client email converts a month at the
+ * mean of every rate published inside it and prints that in its footer; the
+ * dashboard behind the email's button now does the same, and has to say so, or a
+ * client reading £1,202,913 in the email and £1,202,913 on screen has no way of
+ * knowing the two were computed on the same basis rather than agreeing by luck.
  *
  * The collapsed line must never compete with the numbers — one small grey line.
  */
-export const ReportingBasisNote = ({ convertedCurrencies = [], className = '' }: ReportingBasisNoteProps) => {
+export const ReportingBasisNote = ({
+  convertedCurrencies = [],
+  periodStart,
+  periodEnd,
+  className = '',
+}: ReportingBasisNoteProps) => {
   const [open, setOpen] = useState(false);
   const [fx, setFx] = useState<FxRow[] | null>(null);
   const [fxFailed, setFxFailed] = useState(false);
@@ -48,7 +87,7 @@ export const ReportingBasisNote = ({ convertedCurrencies = [], className = '' }:
   );
 
   useEffect(() => {
-    if (!currencyKey) {
+    if (!currencyKey || !periodStart || !periodEnd) {
       setFx(null);
       setFxFailed(false);
       return;
@@ -57,31 +96,33 @@ export const ReportingBasisNote = ({ convertedCurrencies = [], className = '' }:
     let cancelled = false;
     (async () => {
       try {
-        const { data, error } = await supabase
-          .from('fx_rates')
-          .select('quote, rate, rate_date, source')
-          .in('quote', wanted)
-          .order('rate_date', { ascending: false })
-          .limit(200);
+        // rpc_fx_basis returns exactly the rate the RPCs behind these numbers
+        // used, for exactly this window — not a second, independently-derived
+        // figure that could drift from the one the totals were built on.
+        const { data, error } = await (supabase.rpc as any)('rpc_fx_basis', {
+          p_start: periodStart,
+          p_end: periodEnd,
+          p_quotes: wanted,
+        });
         if (cancelled) return;
         if (error || !data || data.length === 0) {
           setFxFailed(true);
           return;
         }
-        // Keep the most recent row per currency, EUR first (the most material for
-        // these accounts), then alphabetical.
-        const seen = new Set<string>();
-        const rows: FxRow[] = [];
-        for (const r of data as any[]) {
-          if (seen.has(r.quote)) continue;
-          seen.add(r.quote);
-          rows.push({ quote: r.quote, rate: Number(r.rate), rateDate: r.rate_date, source: r.source ?? null });
+        const rows: FxRow[] = (data as any[])
+          .filter((r) => r.rate != null)
+          .map((r) => ({
+            quote: r.quote,
+            rate: Number(r.rate),
+            rateDate: r.rate_date,
+            basis: (r.basis as FxBasis) ?? null,
+            observations: r.observations != null ? Number(r.observations) : null,
+            source: r.source ?? null,
+          }));
+        if (rows.length === 0) {
+          setFxFailed(true);
+          return;
         }
-        rows.sort((a, b) => {
-          if (a.quote === 'EUR') return -1;
-          if (b.quote === 'EUR') return 1;
-          return a.quote.localeCompare(b.quote);
-        });
         setFx(rows);
         setFxFailed(false);
       } catch {
@@ -91,7 +132,7 @@ export const ReportingBasisNote = ({ convertedCurrencies = [], className = '' }:
     return () => {
       cancelled = true;
     };
-  }, [currencyKey]);
+  }, [currencyKey, periodStart, periodEnd]);
 
   /** The single rate_date shared by every rate, or null if they disagree. */
   const singleRateDate = useMemo(() => {
@@ -100,12 +141,32 @@ export const ReportingBasisNote = ({ convertedCurrencies = [], className = '' }:
     return dates.size === 1 ? fx[0].rateDate : null;
   }, [fx]);
 
+  /** Null when the currencies on screen were not all resolved the same way. */
+  const singleBasis = useMemo<FxBasis | null>(() => {
+    if (!fx || fx.length === 0) return null;
+    const bases = new Set(fx.map((r) => r.basis));
+    return bases.size === 1 ? fx[0].basis : null;
+  }, [fx]);
+
+  const periodPhrase = useMemo(() => describePeriod(periodStart, periodEnd), [periodStart, periodEnd]);
+
+  const basisPhrase = useMemo(() => {
+    if (singleBasis === 'period_average') return periodPhrase;
+    if (singleBasis === 'spot_asof') return 'the last rate published in the period';
+    if (singleBasis === 'latest_spot') return "today's rate";
+    return 'the rate held for this period';
+  }, [singleBasis, periodPhrase]);
+
   const fxSummary = useMemo(() => {
     if (!currencyKey) return null;
     if (!fx || fx.length === 0) return null;
     const first = fx[0];
-    return `${first.quote}→GBP ${first.rate.toFixed(4)} @ ${formatRateDate(first.rateDate)}${fx.length > 1 ? ` (+${fx.length - 1} more)` : ''}`;
-  }, [fx, currencyKey]);
+    // "EUR→GBP 0.8536 · July 2026 average · +4 more" — the rate, then the basis
+    // that produced it. Never the rate alone: an unlabelled number here is what
+    // let the page and the email disagree without either of them saying so.
+    const label = basisPhrase.replace(/^the /, '');
+    return `${first.quote}→GBP ${first.rate.toFixed(4)} · ${label}${fx.length > 1 ? ` · +${fx.length - 1} more` : ''}`;
+  }, [fx, currencyKey, basisPhrase]);
 
   return (
     <div className={`rounded-lg border border-gray-200 bg-white/80 px-3 py-1.5 md:px-4 md:py-2 ${className}`}>
@@ -159,19 +220,44 @@ export const ReportingBasisNote = ({ convertedCurrencies = [], className = '' }:
             {!currencyKey && <>All figures are shown in GBP as reported by Amazon — no exchange-rate conversion is applied.</>}
             {currencyKey && fx && fx.length > 0 && (
               <>
-                Non-GBP marketplaces are converted to GBP at the daily rate held in our FX table:{' '}
+                Non-GBP marketplaces are converted to GBP at {basisPhrase}:{' '}
                 {fx.map((r, i) => (
                   <span key={r.quote}>
                     {i > 0 ? ', ' : ''}
                     <span className="font-medium text-gray-700">
                       {r.quote}&rarr;GBP {r.rate.toFixed(6)}
                     </span>
-                    {!singleRateDate ? ` (${formatRateDate(r.rateDate)})` : ''}
+                    {!singleRateDate ? ` (to ${formatRateDate(r.rateDate)})` : ''}
                   </span>
                 ))}
-                {singleRateDate ? ` as at ${formatRateDate(singleRateDate)}` : ''}
-                {fx[0].source ? ` (source: ${fx[0].source})` : ''}. The whole period is converted at this single
-                rate, not at each day's rate, so the GBP total will move as the rate moves.
+                {singleRateDate ? ` (rates to ${formatRateDate(singleRateDate)})` : ''}
+                {fx[0].source ? `, source ${fx[0].source}` : ''}.{' '}
+                {singleBasis === 'period_average' && (
+                  <>
+                    The rate is the mean of every rate published inside the period
+                    {fx[0].observations ? ` (${fx[0].observations} publications for ${fx[0].quote})` : ''}, so the
+                    whole period converts at one rate rather than each day at its own. This is the same basis your
+                    monthly performance email uses, and a full calendar month here will match that email exactly.
+                  </>
+                )}
+                {singleBasis === 'spot_asof' && (
+                  <>
+                    No rate was published inside this period — a single day falling on a weekend or a holiday — so
+                    the last rate published on or before it is used.
+                  </>
+                )}
+                {singleBasis === 'latest_spot' && (
+                  <>
+                    We hold no rate from inside this period, so the most recent rate available is used. This will
+                    not tie to a monthly performance email.
+                  </>
+                )}
+                {!singleBasis && (
+                  <>
+                    The currencies on this page did not all resolve the same way; the basis shown against each rate
+                    above is the one applied to it.
+                  </>
+                )}
               </>
             )}
             {currencyKey && (fxFailed || (fx && fx.length === 0)) && (

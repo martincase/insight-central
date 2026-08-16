@@ -140,7 +140,7 @@ const AgencyView = () => {
               <div className="text-xs text-muted-foreground flex items-center gap-1.5"><TrendingUp className="h-3.5 w-3.5" />Total Sales</div>
               {loading ? <Skeleton className="h-7 w-24 mt-1" /> : <div className="text-lg md:text-2xl font-bold mt-1">{fmtGbp(totalGbp)}</div>}
               <div className="text-[10px] text-muted-foreground mt-0.5 inline-flex items-center gap-1">
-                <Info className="h-3 w-3" /> Converted to GBP @ latest FX
+                <Info className="h-3 w-3" /> Converted to GBP at the period average rate
               </div>
             </CardContent>
           </Card>

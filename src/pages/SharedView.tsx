@@ -893,6 +893,17 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
     return Array.from(new Set(source.map((c) => (c.currency || '').toUpperCase()).filter((c) => c && c !== 'GBP')));
   })();
 
+  // The FX rate depends on the window on screen, not on today, so the basis note
+  // is handed the same dates the RPCs behind these numbers were called with.
+  //
+  // Deliberately not a useMemo: this sits below the isLoading / inactive-account
+  // early returns above, so a hook here would change the hook count between
+  // renders. It is two date formats, called once a render.
+  const basisPeriod = (() => {
+    const r = getCurrentDateRange(dateFilter, customDateRange);
+    return { start: format(r.from, 'yyyy-MM-dd'), end: format(r.to, 'yyyy-MM-dd') };
+  })();
+
   // KPI cards must stay in a skeleton until EVERY input has settled. Rendering
   // organic sales before the Ads API resolves showed a confident-looking
   // intermediate total (Portwest: £431,793.68 for ~25s before £605,215.35).
@@ -1025,7 +1036,11 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
 
           {/* Statement of basis, directly beneath the reporting period. */}
           <div className="border-t border-gray-200 bg-gray-50 px-3 py-2 md:px-6">
-            <ReportingBasisNote convertedCurrencies={convertedCurrencies} />
+            <ReportingBasisNote
+              convertedCurrencies={convertedCurrencies}
+              periodStart={basisPeriod.start}
+              periodEnd={basisPeriod.end}
+            />
           </div>
 
           {/* Focused Account Section */}

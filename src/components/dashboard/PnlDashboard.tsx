@@ -252,7 +252,7 @@ export function PnlDashboard({ spid, scope, dateFilter, customDateRange }: Props
           Profit &amp; Loss
           {isRollup && (
             <span className="text-[10px] md:text-xs font-normal text-muted-foreground inline-flex items-center gap-1">
-              <Info className="h-3 w-3" /> Converted to GBP @ latest FX
+              <Info className="h-3 w-3" /> Converted to GBP at the period average rate
             </span>
           )}
         </h2>
