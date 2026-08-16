@@ -8,10 +8,8 @@ interface AuthGateProps {
   children: React.ReactNode;
 }
 
-const PILOT_ACCOUNT_ID = '726ff34c-6b00-457a-a0f8-1b97343b8870';
-
 export const AuthGate: React.FC<AuthGateProps> = ({ children }) => {
-  const { session, loading, signInWithPassword, requestMagicLink, signInWithGoogle } = useAuth();
+  const { session, loading, signInWithPassword, requestMagicLink } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -40,17 +38,10 @@ export const AuthGate: React.FC<AuthGateProps> = ({ children }) => {
   const handleMagicLink = async () => {
     if (!email) { setError('Please enter your email first.'); return; }
     setError(''); setInfo(''); setBusy(true);
-    const { error: err, message } = await requestMagicLink(email, PILOT_ACCOUNT_ID);
+    const { error: err, message } = await requestMagicLink(email);
     setBusy(false);
     if (err) setError(err);
     else setInfo(message || 'Check your inbox for a sign-in link.');
-  };
-
-  const handleGoogle = async () => {
-    setError(''); setInfo(''); setBusy(true);
-    const { error: err } = await signInWithGoogle();
-    setBusy(false);
-    if (err) setError(err.toLowerCase().includes('provider') ? 'Google sign-in is not configured yet. Please use email + password.' : err);
   };
 
   return (
@@ -115,15 +106,11 @@ export const AuthGate: React.FC<AuthGateProps> = ({ children }) => {
               <Mail className="w-4 h-4 mr-2" />
               Email me a sign-in link
             </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className="w-full"
-              onClick={handleGoogle}
-              disabled={busy}
-            >
-              Sign in with Google (staff)
-            </Button>
+            {/* The "Sign in with Google (staff)" button was removed on 2026-08-16.
+                The Google provider was never configured in Supabase Auth, so it only
+                ever produced a "provider not configured" error — a dead control on a
+                sign-in screen teaches people the login is broken. signInWithGoogle
+                remains in useAuth; restore the button when the provider is set up. */}
           </div>
 
           <div className="mt-6 text-center">
