@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "insight-central",
+  "compatibility_date": "2026-08-09",
+
+  // Assets-only Worker — this is a static Vite/React SPA with no server code,
+  // so there is deliberately no "main" entry point.
+  "assets": {
+    "directory": "./dist",
+    // Without this, every client-side route (/portwest/QQTCV, /cottam/IJ92T…)
+    // 404s on a refresh or a direct link from an email. Non-negotiable here:
+    // share links ARE direct links.
+    "not_found_handling": "single-page-application"
+  },
+
+  "routes": [
+    { "pattern": "martincase.app", "custom_domain": true }
+  ],
+
+  "observability": { "enabled": true }
+}

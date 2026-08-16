@@ -312,8 +312,19 @@ export function useApiPpcData({
   const [dataFetched, setDataFetched] = useState(false);
 
   const dateRange = getActualDateRange(dateFilter, customDateRange);
-  // Always fetch at least 30 days so heatmap has full data even with shorter filters
-  const minStart = subDays(new Date(), 30);
+
+  // The heatmap draws its own window, wider than the selected date filter, so this
+  // floor exists to keep it fed. It was 30 days — but the heatmap's WEEKLY view shows
+  // eight weeks back to the start of that week, roughly 63 days. The first four
+  // columns therefore had no advertising to draw and rendered as "no data": on
+  // AirCraft Home that hid about £12,500 of real spend (UK £6,073, DE £3,830,
+  // FR £1,288, ES £873, IT £425) which was present in the database the whole time.
+  //
+  // 70 days covers eight whole weeks plus the partial week at the start and a few
+  // days of feed lag. Keep this ahead of SalesHeatmap's weekly span (subWeeks(…, 7))
+  // or the same gap reappears silently — it looks like missing data, not a short fetch.
+  const HEATMAP_FLOOR_DAYS = 70;
+  const minStart = subDays(new Date(), HEATMAP_FLOOR_DAYS);
   const fetchFrom = dateRange ? (dateRange.from < minStart ? dateRange.from : minStart) : minStart;
   const fetchTo = dateRange ? dateRange.to : new Date();
   const startDate = format(fetchFrom, 'yyyy-MM-dd');
