@@ -67,6 +67,7 @@ import { SalesDriversTab } from '@/components/dashboard/SalesDriversTab';
 import { CountryScopedPerformance } from '@/components/dashboard/CountryScopedPerformance';
 import { ReportingBasisNote } from '@/components/dashboard/ReportingBasisNote';
 import { useLinkAccess } from '@/hooks/useLinkAccess';
+import { RequestDashboardLink } from '@/components/dashboard/RequestDashboardLink';
 
 type ClientTab = 'performance' | 'sales-drivers' | 'search-terms' | 'advertised-products' | 'brand-analytics' | 'profit-loss' | 'budgets' | 'inventory-planner';
 
@@ -829,8 +830,12 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
               to each client and stop working after a while, so please open the most recent one we
               sent you rather than an older email.
             </p>
-            <p className="text-sm text-gray-500">
-              If you need a new link, email us at{' '}
+            {/* Self-service remedy. The form's confirmation never reveals whether
+                the address was recognised, so the hello@ line stays underneath
+                as the route for anyone we do not hold an address for. */}
+            <RequestDashboardLink />
+            <p className="mt-4 text-sm text-gray-500">
+              If nothing arrives, email us at{' '}
               <a href="mailto:hello@martincase.co.uk" className="text-blue-600 hover:text-blue-800 underline">
                 hello@martincase.co.uk
               </a>{' '}
