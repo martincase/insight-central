@@ -66,6 +66,7 @@ import { SalesTrendCard } from '@/components/dashboard/SalesTrendCard';
 import { SalesDriversTab } from '@/components/dashboard/SalesDriversTab';
 import { CountryScopedPerformance } from '@/components/dashboard/CountryScopedPerformance';
 import { ReportingBasisNote } from '@/components/dashboard/ReportingBasisNote';
+import { useLinkAccess } from '@/hooks/useLinkAccess';
 
 type ClientTab = 'performance' | 'sales-drivers' | 'search-terms' | 'advertised-products' | 'brand-analytics' | 'profit-loss' | 'budgets' | 'inventory-planner';
 
@@ -178,6 +179,11 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
   const params = useParams<{ shareId: string; brandName?: string }>();
   const shareId = forcedShareId ?? params.shareId;
   const brandName = forcedBrandName ?? params.brandName;
+
+  // Nothing on this page loads until the visitor has proved they are entitled to
+  // it — a live ?t= token for THIS account, a staff session, or /demo. See
+  // useLinkAccess. The share code alone is not a credential.
+  const access = useLinkAccess({ shareId, brandName, isDemo });
 
   // Reporting-period deep link (see parsePeriodFromSearch above). Read before the
   // date state is created so the very first data fetch already uses the right window.
@@ -373,9 +379,13 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
     );
   };
 
+  // Not one row of client data is fetched until access is granted. Gating only the
+  // render would still have handed a tokenless visitor the whole account over the
+  // network while the refusal page was on screen.
   useEffect(() => {
+    if (access.status !== 'allowed') return;
     loadAccountData();
-  }, [shareId, brandName]);
+  }, [shareId, brandName, access.status]);
 
   // Helper: fetch sales from Supabase and map to sheet-compatible format
   const fetchSalesFromSupabase = async (merchantToken: string, dateRange: { from: Date; to: Date }) => {
@@ -803,14 +813,45 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
     return detectMissingDates(dataSource, account.merchantToken, dateRange);
   }, [rawAsinData, rawVendorData, account, dateFilter, customDateRange, sharedASINStaleInfo]);
 
-  if (isLoading) {
+  // ── Access gate ──────────────────────────────────────────────────────────
+  // Refusal is deliberately uniform: no token, a mistyped token, an expired one
+  // and someone else's token all produce this identical page. It never confirms
+  // that the account exists, and it never uses the words token, expired or
+  // invalid — the reader did nothing wrong, their link is simply too old.
+  if (access.status === 'refused') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-cyan-50 p-8">
+        <div className="max-w-4xl mx-auto">
+          <div className="bg-white p-8 rounded-lg shadow">
+            <h1 className="text-2xl font-bold mb-4 text-gray-900">We can&rsquo;t open this dashboard</h1>
+            <p className="mb-4 text-gray-700">
+              This link has either expired or isn&rsquo;t quite complete. Dashboard links are personal
+              to each client and stop working after a while, so please open the most recent one we
+              sent you rather than an older email.
+            </p>
+            <p className="text-sm text-gray-500">
+              If you need a new link, email us at{' '}
+              <a href="mailto:hello@martincase.co.uk" className="text-blue-600 hover:text-blue-800 underline">
+                hello@martincase.co.uk
+              </a>{' '}
+              and we&rsquo;ll send you a fresh one straight away.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (access.status === 'checking' || isLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-cyan-50 p-8">
         <div className="max-w-4xl mx-auto">
           <div className="bg-white p-8 rounded-lg shadow">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
             <p className="text-center">Loading shared dashboard...</p>
-            <p className="text-center text-sm text-gray-500 mt-2">{status}</p>
+            <p className="text-center text-sm text-gray-500 mt-2">
+              {access.status === 'checking' ? 'Checking your link...' : status}
+            </p>
           </div>
         </div>
       </div>
