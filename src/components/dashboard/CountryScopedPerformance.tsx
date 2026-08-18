@@ -416,13 +416,26 @@ export function CountryScopedPerformance({
               {/* Same key as every other heatmap in the app — it has to be above
                   the grid, you need it to read a cell. */}
               <HeatmapLegend showInverseNote={anyInverseRow} />
-              <div className="overflow-x-auto">
+              {/* A named, focusable scroller: the grid is wider than a phone and
+                  a keyboard user has to be able to reach the right-hand days. The
+                  first column stays pinned so a scrolled cell keeps its row. */}
+              <div
+                role="region"
+                aria-label={`Daily performance heatmap for ${scopeLabel(scope)}, scrollable sideways`}
+                tabIndex={0}
+                className="overflow-x-auto rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
                 <table className="min-w-full text-xs border-separate border-spacing-0">
+                  <caption className="sr-only">
+                    Daily performance for {scopeLabel(scope)}, {format(currentRange.from, 'd MMM')} to{' '}
+                    {format(currentRange.to, 'd MMM yyyy')}. Rows are metrics, columns are days.
+                    Hatched cells marked “—” were not reported.
+                  </caption>
                   <thead>
                     <tr>
-                      <th className="text-left p-2 font-medium text-muted-foreground sticky left-0 bg-background z-10">Metric</th>
+                      <th scope="col" className="text-left p-2 font-medium text-muted-foreground sticky left-0 bg-background z-10">Metric</th>
                       {days.map(d => (
-                        <th key={d.toISOString()} className="p-1 text-center font-medium text-muted-foreground min-w-[52px]">
+                        <th key={d.toISOString()} scope="col" className="p-1 text-center font-medium text-muted-foreground min-w-[52px]">
                           <div>{format(d, 'EEE')}</div>
                           <div className="text-[10px]">{format(d, 'MMM d')}</div>
                         </th>
@@ -434,7 +447,16 @@ export function CountryScopedPerformance({
                       const inverse = isInverseHeatmapMetric(row.metric);
                       return (
                         <tr key={row.label}>
-                          <td className="p-2 font-medium sticky left-0 bg-background z-10">{row.label}</td>
+                          {/* scope="row" so a screen reader announces the metric with
+                              every cell — without it this is 126 unlabelled numbers. */}
+                          <th scope="row" className="text-left p-2 font-medium sticky left-0 bg-background z-10">
+                            {row.label}
+                            {/* Stated on the row, not only in the key above: clients
+                                screenshot the grid on its own. */}
+                            {inverse ? (
+                              <span className="ml-1 font-normal text-[10px] text-muted-foreground">▼ lower is better</span>
+                            ) : null}
+                          </th>
                           {/* Iterate the DAYS, not the series. When the feed returned
                               nothing at all the series are empty, and mapping them
                               rendered a header row of dates above a row of no cells.
@@ -446,12 +468,15 @@ export function CountryScopedPerformance({
                             return (
                               <td key={i} className="p-1 text-center">
                                 <div
-                                  className="rounded px-1 py-1 text-[11px] font-medium"
+                                  className="relative rounded px-1 py-1 text-[11px] font-medium"
                                   style={getHeatmapCellStyle(heatmapIntensity(v, row.max, inverse), hasValue)}
                                   title={hasValue
-                                    ? `${row.label} — ${dayLabel}: ${row.fmt(v)}`
+                                    ? `${row.label}${inverse ? ' (lower is better)' : ''} — ${dayLabel}: ${row.fmt(v)}`
                                     : `${row.label} — ${dayLabel}: not reported`}
                                 >
+                                  {inverse && hasValue ? (
+                                    <span aria-hidden="true" className="absolute left-0.5 top-0.5 text-[8px] leading-none opacity-70">▼</span>
+                                  ) : null}
                                   {hasValue ? row.fmt(v) : '—'}
                                 </div>
                               </td>

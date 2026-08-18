@@ -130,6 +130,34 @@ export const formatAcos = (
 };
 
 /**
+ * A ratio also needs a denominator big enough to be worth printing.
+ *
+ * Cottam's 17 Aug held £1 of PPC spend against £5 of attributed PPC sales — two
+ * real numbers that divide to a confident-looking headline percentage on a day
+ * whose sales feed had not landed at all. Both figures are the first trickle of
+ * a partially-delivered day, not a day's trading. Below this much attributed
+ * revenue the percentage is noise wearing a percent sign, so it is withheld
+ * rather than shown.
+ *
+ * Deliberately low: on any account that advertises at all, a real day clears it
+ * by two orders of magnitude, so it only ever catches the trickle. Applied in
+ * whatever currency the account reports in — the order of magnitude is the same
+ * in GBP, EUR and USD, and the point is the magnitude, not the money.
+ */
+export const RATIO_MIN_DENOMINATOR = 10;
+
+/**
+ * Whether a spend ÷ sales ratio is safe to print as a headline figure: defined
+ * (`isAcosDefined`) AND off a denominator that can carry one. Use this wherever
+ * the ratio is shown on its own — a heatmap cell, a KPI tile — as opposed to
+ * inside a table row where the two inputs are visible beside it.
+ */
+export const isRatioMeaningful = (
+  numerator: number | null | undefined,
+  denominator: number | null | undefined,
+): boolean => isAcosDefined(numerator, denominator) && Number(denominator) >= RATIO_MIN_DENOMINATOR;
+
+/**
  * Advertising conversion rate — orders ÷ clicks.
  *
  * Amazon attributes an order to a click for up to 7 (or 14) days, and one click
