@@ -18,10 +18,11 @@ import { MetricsCard } from './MetricsCard';
 import { getCurrencyInfo, getCurrencyInfoByCode } from '@/utils/currencyUtils';
 import { getCountryName } from '@/utils/countryUtils';
 import { getAmazonProductUrl } from '@/utils/amazonUtils';
-import { getCurrentDateRange, getPreviousDateRange } from '@/utils/dataProcessor';
+/* Date ranges are no longer derived here: the hook owns them, because only the
+   hook knows how far the feed has actually landed. */
 import { buildComparisonLabel } from '@/utils/comparisonLabels';
 import { describeMissingDates } from '@/utils/kpiIntegrity';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Info } from 'lucide-react';
 import type { DateFilter } from '@/types/dashboard';
 import { HeatmapLegend } from './HeatmapLegend';
 import { getHeatmapCellStyle, heatmapIntensity, isInverseHeatmapMetric } from '@/utils/heatmapScale';
@@ -70,7 +71,11 @@ export function CountryScopedPerformance({
 
   // Single scoped source, shared with the KPI grid so the two cannot disagree.
   const scopedMetrics = useScopedMetrics(spid, scope, dateFilter, customDateRange);
-  const { totals, previousTotals, series, days, dayHasData, completeness, loading, error: scopeError } = scopedMetrics;
+  const {
+    totals, previousTotals, series, days, dayHasData, completeness,
+    truncation, effectiveRange, effectivePreviousRange,
+    loading, error: scopeError,
+  } = scopedMetrics;
 
   // See MetricsGrid: a period the feed only half covers is not a period. The
   // total is qualified, the comparison and any ads-over-sales ratio withheld.
@@ -99,27 +104,27 @@ export function CountryScopedPerformance({
     `${cur.symbol}${new Intl.NumberFormat(cur.locale, { maximumFractionDigits: 0 }).format(v ?? 0)}`;
   const fmtNum = (v: number) => new Intl.NumberFormat(cur.locale).format(Math.round(v ?? 0));
 
-  const currentRange = useMemo(() => getCurrentDateRange(dateFilter, customDateRange), [dateFilter, customDateRange]);
-  const pStart = useMemo(() => format(currentRange.from, 'yyyy-MM-dd'), [currentRange.from]);
-  const pEnd = useMemo(() => format(currentRange.to, 'yyyy-MM-dd'), [currentRange.to]);
-  // The previous period is fetched inside useScopedMetrics, but the label needs
-  // it too. Derived from the same filter + custom range the hook is given, so
-  // the named baseline is by construction the one the figures came from.
-  const previousRange = useMemo(
-    () => getPreviousDateRange(dateFilter, customDateRange),
-    [dateFilter, customDateRange]
-  );
+  // The ASIN table has to cover the SAME days as the headline above it. Reading
+  // the selected range here while the KPIs read the truncated one is how a
+  // fourteen-day product table came to sit under a twelve-day total, with the
+  // two disagreeing by exactly the days that had not landed.
+  const pStart = useMemo(() => format(effectiveRange.from, 'yyyy-MM-dd'), [effectiveRange.from]);
+  const pEnd = useMemo(() => format(effectiveRange.to, 'yyyy-MM-dd'), [effectiveRange.to]);
 
-  // Name the baseline on the card face. Built from the exact ranges this
-  // component queries, so the label can never drift from the figures.
+  // Name the baseline on the card face. Built from the EFFECTIVE ranges — the
+  // days actually summed — so the label can never drift from the figures.
   const comparison = useMemo(
-    () => buildComparisonLabel(currentRange, previousRange, {
+    () => buildComparisonLabel(effectiveRange, effectivePreviousRange, {
       rolling: dateFilter === 'last-7-days' || dateFilter === 'last-14-days' || dateFilter === 'past-30-days',
+      truncatedDays: truncation.trimmedDays,
     }),
-    [currentRange, previousRange, dateFilter]
+    [effectiveRange, effectivePreviousRange, dateFilter, truncation.trimmedDays]
   );
 
   useEffect(() => {
+    // Wait for the truncation to settle: firing on the untruncated range first
+    // would fetch the table twice and flash the wrong window.
+    if (loading) return;
     let cancelled = false;
     setAsinLoading(true);
     (async () => {
@@ -138,7 +143,7 @@ export function CountryScopedPerformance({
       }
     })();
     return () => { cancelled = true; };
-  }, [spid, scope, pStart, pEnd]);
+  }, [spid, scope, pStart, pEnd, loading]);
 
   const salesSpark = series.sales;
   const unitsSpark = series.units;
@@ -356,6 +361,23 @@ export function CountryScopedPerformance({
 
   return (
     <>
+      {completeness.pendingHeadline && (
+        <div
+          role="status"
+          className="flex items-start gap-2 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-700"
+        >
+          <Info className="h-4 w-4 mt-0.5 flex-shrink-0" />
+          <div>
+            <div className="font-medium">
+              {truncation.trimmedDays > 0
+                ? `Showing ${truncation.completeDays} complete days`
+                : 'Most recent days still landing'}
+            </div>
+            <div className="text-xs mt-0.5">{completeness.pendingHeadline}</div>
+          </div>
+        </div>
+      )}
+
       {completeness.headline && (
         <div
           role="status"
@@ -403,7 +425,9 @@ export function CountryScopedPerformance({
         <Card>
           <CardHeader>
             <CardTitle className="text-sm md:text-base">
-              {format(currentRange.from, 'MMM d')} – {format(currentRange.to, 'MMM d, yyyy')}
+              {/* The days the grid below actually draws, not the days the picker
+                  asked for — the two differ whenever a feed is still landing. */}
+              {format(effectiveRange.from, 'MMM d')} – {format(effectiveRange.to, 'MMM d, yyyy')}
             </CardTitle>
           </CardHeader>
           <CardContent>

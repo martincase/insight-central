@@ -74,7 +74,14 @@ export const TrendIndicator = ({
 
   const baselineCaption = (extra?: string) => {
     if (!comparison || !showBaselineOnFace) return null;
-    const text = [comparison.short, comparison.lengthNote, extra].filter(Boolean).join(' · ');
+    // Four notes can ride on the badge and at most three ever appear at once:
+    // lengthNote only fires when the windows differ in length, and
+    // completenessNote only fires when truncation has just made them equal, so
+    // they are mutually exclusive. A client needs both what this is compared
+    // against and how much of the period it actually covers.
+    const text = [comparison.short, comparison.lengthNote, comparison.completenessNote, extra]
+      .filter(Boolean)
+      .join(' · ');
     return (
       <span className="text-[10px] leading-tight text-gray-500 font-normal whitespace-normal">
         {text}

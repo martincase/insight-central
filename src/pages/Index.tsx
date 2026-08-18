@@ -1445,6 +1445,14 @@ const Index = () => {
                           }
                         : null
                     }
+                    dataNote={
+                      focusedScopedMetrics.completeness.pendingDays > 0
+                        ? {
+                            title: 'Most recent days still landing',
+                            detail: focusedScopedMetrics.completeness.pendingHeadline,
+                          }
+                        : null
+                    }
                   />
 
                   {focusedBrandCountries.spid && (

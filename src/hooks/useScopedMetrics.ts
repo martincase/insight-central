@@ -2,7 +2,16 @@ import { useEffect, useMemo, useState } from 'react';
 import { format, eachDayOfInterval } from 'date-fns';
 import { supabase } from '@/integrations/supabase/client';
 import { getCurrentDateRange, getPreviousDateRange } from '@/utils/dataProcessor';
-import { assessCompleteness, COMPLETENESS_UNKNOWN, type DataCompleteness } from '@/utils/kpiIntegrity';
+import {
+  assessCompleteness,
+  describeTrailingLag,
+  findLastCompleteDay,
+  COMPLETENESS_UNKNOWN,
+  NO_TRUNCATION,
+  type DataCompleteness,
+  type FeedSeries,
+  type WindowTruncation,
+} from '@/utils/kpiIntegrity';
 import type { DateFilter } from '@/types/dashboard';
 
 /**
@@ -104,6 +113,22 @@ export interface UseScopedMetricsResult {
   dayHasData: boolean[];
   /** How much of the selected window the sales series actually covers. */
   completeness: DataCompleteness;
+  /**
+   * What was cut off the trailing edge of the selected window, and why.
+   *
+   * Everything above — totals, previousTotals, series, days, dayHasData — is
+   * already reported ON THE TRUNCATED WINDOW. This is the audit trail, for
+   * captioning the cards and naming the excluded days.
+   */
+  truncation: WindowTruncation;
+  /**
+   * The dates the figures ACTUALLY cover, after truncation. Anything that
+   * queries alongside this hook (the ASIN table) or captions it (the comparison
+   * label) must use these, or the page will describe a window it is not showing.
+   */
+  effectiveRange: { from: Date; to: Date };
+  /** The baseline, cut to the same number of days. */
+  effectivePreviousRange: { from: Date; to: Date };
   loading: boolean;
   error: string | null;
 }
@@ -261,7 +286,8 @@ export function useScopedMetrics(
     return () => { cancelled = true; };
   }, [spid, scope, pStart, pEnd, ppStart, ppEnd]);
 
-  const days = useMemo(
+  /** Every calendar day of the SELECTED window, before any truncation. */
+  const windowDays = useMemo(
     () => eachDayOfInterval({ start: currentRange.from, end: currentRange.to }),
     [currentRange.from, currentRange.to],
   );
@@ -274,13 +300,100 @@ export function useScopedMetrics(
     return m;
   }, [daily]);
 
+  const windowKeys = useMemo(() => windowDays.map((d) => format(d, 'yyyy-MM-dd')), [windowDays]);
+
+  // ---------------------------------------------------------------------
+  // Truncate to the days that have actually landed.
+  //
+  // Each feed is judged on its own trailing trend and the EARLIEST verdict
+  // wins, because a day does not arrive all at once: on Portwest's 16 August,
+  // sessions were 89% of trend, page views 8% and units 0.6%. Sales is judged
+  // in GBP rather than native currency so a mixed-currency scope is still
+  // comparing a day against its own history and not against an exchange rate.
+  //
+  // Buy box is deliberately absent: it is a percentage, so a half-delivered
+  // day carries a perfectly ordinary-looking 92% and would vouch for a day
+  // with sixteen units in it.
+  // ---------------------------------------------------------------------
+  const truncation = useMemo<WindowTruncation>(() => {
+    if (loading || error || !spid || !scope || !windowDays.length) return NO_TRUNCATION;
+    const hasRow = windowKeys.map((k) => byDay.has(k));
+    const pick = (fn: (r: ScopedDailyRow) => number) =>
+      windowKeys.map((k) => {
+        const r = byDay.get(k);
+        return r ? fn(r) : 0;
+      });
+    const feeds: FeedSeries[] = [
+      { key: 'sales', label: 'sales', values: pick((r) => num(r.sales_gbp)) },
+      { key: 'units', label: 'units', values: pick((r) => num(r.units)) },
+      { key: 'pageViews', label: 'page views', values: pick((r) => num(r.page_views)) },
+      { key: 'sessions', label: 'sessions', values: pick((r) => num(r.sessions)) },
+    ];
+    return findLastCompleteDay(hasRow, feeds);
+  }, [loading, error, spid, scope, windowDays, windowKeys, byDay]);
+
+  /** The days the figures actually cover. Identical to windowDays when nothing lagged. */
+  const days = useMemo(
+    () => (truncation.trimmedDays > 0 ? windowDays.slice(0, truncation.completeDays) : windowDays),
+    [windowDays, truncation],
+  );
+
+  const trailingLag = useMemo(
+    () => describeTrailingLag(truncation, windowKeys),
+    [truncation, windowKeys],
+  );
+
+  /** Rows inside the truncated window. The trimmed days are not summed anywhere. */
+  const inWindow = useMemo(() => {
+    if (truncation.trimmedDays <= 0) return daily;
+    const keep = new Set(windowKeys.slice(0, truncation.completeDays));
+    return daily.filter((r) => keep.has(String(r.bucket).slice(0, 10)));
+  }, [daily, windowKeys, truncation]);
+
+  // ---------------------------------------------------------------------
+  // The baseline is cut to the SAME NUMBER OF DAYS, taken from the FRONT of the
+  // previous window.
+  //
+  // Front, not back, because every preset window is a contiguous block: the
+  // previous 14 days start exactly 14 days before the current 14, so day 1 of
+  // each falls on the same weekday. Trimming the baseline from the back instead
+  // would shift it two weekdays out of step and swap a weekend for a Monday —
+  // a like-for-like fix that quietly reintroduced a different distortion.
+  //
+  // For a whole calendar month the same rule reads as month-to-date against the
+  // same days of the month before, which is the comparison a client makes anyway.
+  // ---------------------------------------------------------------------
+  const previousDays = useMemo(
+    () => eachDayOfInterval({ start: previousRange.from, end: previousRange.to }),
+    [previousRange.from, previousRange.to],
+  );
+
+  const prevInWindow = useMemo(() => {
+    if (truncation.trimmedDays <= 0) return prev;
+    const keep = new Set(
+      previousDays.slice(0, truncation.completeDays).map((d) => format(d, 'yyyy-MM-dd')),
+    );
+    return prev.filter((r) => keep.has(String(r.bucket).slice(0, 10)));
+  }, [prev, previousDays, truncation]);
+
+  const effectiveRange = useMemo(
+    () => ({ from: currentRange.from, to: days.length ? days[days.length - 1] : currentRange.to }),
+    [currentRange.from, currentRange.to, days],
+  );
+
+  const effectivePreviousRange = useMemo(() => {
+    if (truncation.trimmedDays <= 0 || !previousDays.length) return previousRange;
+    const cut = previousDays.slice(0, truncation.completeDays);
+    return { from: previousRange.from, to: cut.length ? cut[cut.length - 1] : previousRange.to };
+  }, [previousRange, previousDays, truncation]);
+
   // The currency decision is made ONCE, for the whole scope, and both the
   // headline total and the daily series obey it. Deciding per row is what put
   // native pounds-and-dollars in the total and GBP in the series.
-  const single = useMemo(() => isSingleCurrency(daily), [daily]);
+  const single = useMemo(() => isSingleCurrency(inWindow), [inWindow]);
 
   const series = useMemo<ScopedSeries>(() => {
-    if (!daily.length) return EMPTY_SERIES;
+    if (!inWindow.length) return EMPTY_SERIES;
     const rowSales = (r: ScopedDailyRow) => (single ? num(r.sales_native) : num(r.sales_gbp));
     const pick = <T,>(fn: (r: ScopedDailyRow) => T, fallback: T) =>
       days.map((d) => {
@@ -295,7 +408,7 @@ export function useScopedMetrics(
       conversionUnits: pick((r) => num(r.units_with_sessions), 0),
       buyBox: pick((r) => num(r.buy_box_pct), 0),
     };
-  }, [daily, days, byDay, single]);
+  }, [inWindow, days, byDay, single]);
 
   // Built from the same byDay map the series are, so a cell can never be told
   // "no data" for a day the series drew a figure from, or vice versa.
@@ -304,16 +417,37 @@ export function useScopedMetrics(
     [days, byDay],
   );
 
-  const totals = useMemo(() => summarise(daily), [daily]);
-  const previousTotals = useMemo(() => summarise(prev), [prev]);
+  const totals = useMemo(() => summarise(inWindow), [inWindow]);
+  const previousTotals = useMemo(() => summarise(prevInWindow), [prevInWindow]);
 
   // A day is "present" when the feed produced a row for it. Loading states must
   // not read as a gap, so completeness is unknown until the fetch settles.
+  //
+  // Assessed on the TRUNCATED window: the trailing days that have not landed
+  // are handed over as `pending` instead, so they are disclosed as "still
+  // arriving" rather than counted as an outage or — as before — silently
+  // dropped out of the assessment and reported nowhere at all.
   const completeness = useMemo<DataCompleteness>(() => {
     if (loading || error) return COMPLETENESS_UNKNOWN;
     if (!spid || !scope) return COMPLETENESS_UNKNOWN;
-    return assessCompleteness(days, byDay.keys());
-  }, [loading, error, spid, scope, days, byDay]);
+    return assessCompleteness(days, byDay.keys(), new Date(), {
+      dates: trailingLag.dates,
+      note: trailingLag.note,
+    });
+  }, [loading, error, spid, scope, days, byDay, trailingLag]);
 
-  return { daily, totals, previousTotals, series, days, dayHasData, completeness, loading, error };
+  return {
+    daily,
+    totals,
+    previousTotals,
+    series,
+    days,
+    dayHasData,
+    completeness,
+    truncation,
+    effectiveRange,
+    effectivePreviousRange,
+    loading,
+    error,
+  };
 }
