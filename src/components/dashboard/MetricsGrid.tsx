@@ -7,6 +7,7 @@ import { AdTypeToggle } from '@/components/dashboard/AdTypeToggle';
 import type { AccountData, DateFilter } from '@/types/dashboard';
 import type { ApiPpcMetrics, AdType, ApiPpcDailyRow } from '@/hooks/useApiPpcData';
 import { isVendorAccount as isVendorAccountCheck } from '@/utils/vendorUtils';
+import { isMetricPlottable } from '@/hooks/useChartMetrics';
 import type { UseScopedMetricsResult } from '@/hooks/useScopedMetrics';
 import { describeMissingDates } from '@/utils/kpiIntegrity';
 import { AlertTriangle } from 'lucide-react';
@@ -72,6 +73,24 @@ export const MetricsGrid = ({
   customDateRange,
 }: MetricsGridProps) => {
   const isVendor = isVendorAccountCheck(focusedAccount?.merchantToken);
+
+  // ---------------------------------------------------------------------
+  // KPI card → chart wiring.
+  //
+  // A card only offers the click when there is a series behind it. Vendor
+  // accounts have no advertising feed at all, so PPC Impressions on a vendor
+  // dashboard used to be a card you could press to add a bar pinned to zero —
+  // which reads as a broken chart, not as "Amazon doesn't give us this for 1P".
+  // The same gate drives isSelected, otherwise a vendor would see "Added to
+  // chart" on a card whose series was never drawn.
+  // ---------------------------------------------------------------------
+  const chartToggleFor = (metricKey: string) =>
+    onToggleChartMetric && isMetricPlottable(metricKey, isVendor)
+      ? () => onToggleChartMetric(metricKey)
+      : undefined;
+
+  const chartSelected = (metricKey: string) =>
+    isMetricPlottable(metricKey, isVendor) && !!selectedChartMetrics?.includes(metricKey);
 
   // Name the baseline every delta is measured against. Derived from the actual
   // date ranges rather than a hand-maintained lookup — the old map was keyed on
@@ -455,8 +474,8 @@ export const MetricsGrid = ({
                 currentValue={vendorSales}
                 previousValue={scopedPrev ? scopedPrev.sales : (prevVendorSales || totalPreviousMetrics.sales)}
                 comparisonLabel={comparisonLabel}
-                onClick={onToggleChartMetric ? () => onToggleChartMetric('sales') : undefined}
-                isSelected={selectedChartMetrics?.includes('sales')}
+                onClick={chartToggleFor('sales')}
+                isSelected={chartSelected('sales')}
                 sparklineData={vendorSalesSpark}
                 seriesSemantics={scopedSeries ? 'sum' : undefined}
                 comparisonSuppressedReason={incompleteNote}
@@ -470,8 +489,8 @@ export const MetricsGrid = ({
                 currentValue={vendorUnits}
                 previousValue={scopedPrev ? scopedPrev.unitsOrdered : (prevVendorOrders || totalPreviousMetrics.unitsOrdered)}
                 comparisonLabel={comparisonLabel}
-                onClick={onToggleChartMetric ? () => onToggleChartMetric('unitsSold') : undefined}
-                isSelected={selectedChartMetrics?.includes('unitsSold')}
+                onClick={chartToggleFor('unitsSold')}
+                isSelected={chartSelected('unitsSold')}
                 sparklineData={vendorUnitsSpark}
                 seriesSemantics={scopedSeries ? 'sum' : undefined}
                 comparisonSuppressedReason={incompleteNote}
@@ -497,8 +516,8 @@ export const MetricsGrid = ({
                   currentValue={ppcSpend}
                   previousValue={prevPpcSpend}
                   comparisonLabel={comparisonLabel}
-                  onClick={onToggleChartMetric ? () => onToggleChartMetric('ppcSpend') : undefined}
-                  isSelected={selectedChartMetrics?.includes('ppcSpend')}
+                  onClick={chartToggleFor('ppcSpend')}
+                  isSelected={chartSelected('ppcSpend')}
                   sparklineData={sparklines.spend}
                 />
                 <MetricsCard
@@ -508,8 +527,8 @@ export const MetricsGrid = ({
                   currentValue={ppcSales}
                   previousValue={prevPpcSales}
                   comparisonLabel={comparisonLabel}
-                  onClick={onToggleChartMetric ? () => onToggleChartMetric('ppcSales') : undefined}
-                  isSelected={selectedChartMetrics?.includes('ppcSales')}
+                  onClick={chartToggleFor('ppcSales')}
+                  isSelected={chartSelected('ppcSales')}
                   sparklineData={sparklines.sales}
                 />
                 <MetricsCard
@@ -521,8 +540,8 @@ export const MetricsGrid = ({
                   previousValue={rateDelta(prevPpcAcos)}
                   comparisonLabel={comparisonLabel}
                   isPercentage={true}
-                  onClick={onToggleChartMetric ? () => onToggleChartMetric('acos') : undefined}
-                  isSelected={selectedChartMetrics?.includes('acos')}
+                  onClick={chartToggleFor('acos')}
+                  isSelected={chartSelected('acos')}
                   sparklineData={sparklines.acos}
                 />
                 <MetricsCard
@@ -564,8 +583,8 @@ export const MetricsGrid = ({
               currentValue={totalMetrics.sales}
               previousValue={totalPreviousMetrics.sales}
               comparisonLabel={comparisonLabel}
-              onClick={onToggleChartMetric ? () => onToggleChartMetric('sales') : undefined}
-              isSelected={selectedChartMetrics?.includes('sales')}
+              onClick={chartToggleFor('sales')}
+              isSelected={chartSelected('sales')}
               sparklineData={scopedSeries?.sales ?? sparklines.sales}
               seriesSemantics={scopedSeries ? 'sum' : undefined}
               comparisonSuppressedReason={incompleteNote}
@@ -581,8 +600,8 @@ export const MetricsGrid = ({
               currentValue={ppcSpend}
               previousValue={prevPpcSpend}
               comparisonLabel={comparisonLabel}
-              onClick={onToggleChartMetric ? () => onToggleChartMetric('ppcSpend') : undefined}
-              isSelected={selectedChartMetrics?.includes('ppcSpend')}
+              onClick={chartToggleFor('ppcSpend')}
+              isSelected={chartSelected('ppcSpend')}
               sparklineData={sparklines.spend}
             />
             
@@ -594,8 +613,8 @@ export const MetricsGrid = ({
               currentValue={ppcSales}
               previousValue={prevPpcSales}
               comparisonLabel={comparisonLabel}
-              onClick={onToggleChartMetric ? () => onToggleChartMetric('ppcSales') : undefined}
-              isSelected={selectedChartMetrics?.includes('ppcSales')}
+              onClick={chartToggleFor('ppcSales')}
+              isSelected={chartSelected('ppcSales')}
               sparklineData={sparklines.sales}
             />
 
@@ -607,8 +626,8 @@ export const MetricsGrid = ({
               currentValue={totalMetrics.unitsOrdered}
               previousValue={totalPreviousMetrics.unitsOrdered}
               comparisonLabel={comparisonLabel}
-              onClick={onToggleChartMetric ? () => onToggleChartMetric('unitsSold') : undefined}
-              isSelected={selectedChartMetrics?.includes('unitsSold')}
+              onClick={chartToggleFor('unitsSold')}
+              isSelected={chartSelected('unitsSold')}
               sparklineData={scopedSeries?.units ?? sparklines.orders}
               seriesSemantics={scopedSeries ? 'sum' : undefined}
               comparisonSuppressedReason={incompleteNote}
@@ -646,8 +665,8 @@ export const MetricsGrid = ({
               previousValue={rateDelta(prevPpcAcos)}
               comparisonLabel={comparisonLabel}
               isPercentage={true}
-              onClick={onToggleChartMetric ? () => onToggleChartMetric('acos') : undefined}
-              isSelected={selectedChartMetrics?.includes('acos')}
+              onClick={chartToggleFor('acos')}
+              isSelected={chartSelected('acos')}
               sparklineData={sparklines.acos}
             />
             
@@ -661,8 +680,8 @@ export const MetricsGrid = ({
               previousValue={rateDelta(prevTacos)}
               comparisonLabel={comparisonLabel}
               isPercentage={true}
-              onClick={onToggleChartMetric ? () => onToggleChartMetric('tacos') : undefined}
-              isSelected={selectedChartMetrics?.includes('tacos')}
+              onClick={chartToggleFor('tacos')}
+              isSelected={chartSelected('tacos')}
               comparisonSuppressedReason={incompleteNote}
             />
 
@@ -676,8 +695,8 @@ export const MetricsGrid = ({
               previousValue={rateDelta(prevAdvertisingReliance)}
               comparisonLabel={comparisonLabel}
               isPercentage={true}
-              onClick={onToggleChartMetric ? () => onToggleChartMetric('advertisingReliance') : undefined}
-              isSelected={selectedChartMetrics?.includes('advertisingReliance')}
+              onClick={chartToggleFor('advertisingReliance')}
+              isSelected={chartSelected('advertisingReliance')}
               comparisonSuppressedReason={incompleteNote}
             />
 
@@ -689,8 +708,8 @@ export const MetricsGrid = ({
               currentValue={ppcImpressions}
               previousValue={prevPpcImpressions}
               comparisonLabel={comparisonLabel}
-              onClick={onToggleChartMetric ? () => onToggleChartMetric('impressions') : undefined}
-              isSelected={selectedChartMetrics?.includes('impressions')}
+              onClick={chartToggleFor('impressions')}
+              isSelected={chartSelected('impressions')}
               sparklineData={sparklines.impressions}
             />
           </div>
@@ -704,8 +723,8 @@ export const MetricsGrid = ({
               currentValue={ppcClicks}
               previousValue={prevPpcClicks}
               comparisonLabel={comparisonLabel}
-              onClick={onToggleChartMetric ? () => onToggleChartMetric('clicks') : undefined}
-              isSelected={selectedChartMetrics?.includes('clicks')}
+              onClick={chartToggleFor('clicks')}
+              isSelected={chartSelected('clicks')}
               sparklineData={sparklines.clicks}
             />
 
@@ -717,8 +736,8 @@ export const MetricsGrid = ({
               currentValue={rateDelta(ppcCpc)}
               previousValue={rateDelta(prevPpcCpc)}
               comparisonLabel={comparisonLabel}
-              onClick={onToggleChartMetric ? () => onToggleChartMetric('cpc') : undefined}
-              isSelected={selectedChartMetrics?.includes('cpc')}
+              onClick={chartToggleFor('cpc')}
+              isSelected={chartSelected('cpc')}
               sparklineData={sparklines.cpc}
             />
 
@@ -730,8 +749,8 @@ export const MetricsGrid = ({
               previousValue={rateDelta(prevPpcCtr)}
               comparisonLabel={comparisonLabel}
               isPercentage={true}
-              onClick={onToggleChartMetric ? () => onToggleChartMetric('ctr') : undefined}
-              isSelected={selectedChartMetrics?.includes('ctr')}
+              onClick={chartToggleFor('ctr')}
+              isSelected={chartSelected('ctr')}
               sparklineData={sparklines.ctr}
             />
 
@@ -743,8 +762,8 @@ export const MetricsGrid = ({
               currentValue={rateDelta(ppcCpa)}
               previousValue={rateDelta(prevPpcCpa)}
               comparisonLabel={comparisonLabel}
-              onClick={onToggleChartMetric ? () => onToggleChartMetric('cpa') : undefined}
-              isSelected={selectedChartMetrics?.includes('cpa')}
+              onClick={chartToggleFor('cpa')}
+              isSelected={chartSelected('cpa')}
             />
           </div>
         </div>
@@ -765,8 +784,8 @@ export const MetricsGrid = ({
                 currentValue={totalMetrics.pageViews}
                 previousValue={totalPreviousMetrics.pageViews}
               comparisonLabel={comparisonLabel}
-                onClick={onToggleChartMetric ? () => onToggleChartMetric('pageViews') : undefined}
-                isSelected={selectedChartMetrics?.includes('pageViews')}
+                onClick={chartToggleFor('pageViews')}
+                isSelected={chartSelected('pageViews')}
                 sparklineData={scopedSeries?.pageViews}
                 seriesSemantics={scopedSeries ? 'sum' : undefined}
                 subtitle={
@@ -789,8 +808,8 @@ export const MetricsGrid = ({
                 previousValue={avgPreviousBuyBoxPercentage}
               comparisonLabel={comparisonLabel}
                 isPercentage={true}
-                onClick={onToggleChartMetric ? () => onToggleChartMetric('buyBoxPercentage') : undefined}
-                isSelected={selectedChartMetrics?.includes('buyBoxPercentage')}
+                onClick={chartToggleFor('buyBoxPercentage')}
+                isSelected={chartSelected('buyBoxPercentage')}
                 comparisonSuppressedReason={incompleteNote}
               />
 
@@ -818,8 +837,8 @@ export const MetricsGrid = ({
                 previousValue={conversionAvailable ? avgPreviousConversionRate : 0}
               comparisonLabel={comparisonLabel}
                 isPercentage={true}
-                onClick={onToggleChartMetric ? () => onToggleChartMetric('conversionRate') : undefined}
-                isSelected={selectedChartMetrics?.includes('conversionRate')}
+                onClick={chartToggleFor('conversionRate')}
+                isSelected={chartSelected('conversionRate')}
                 comparisonSuppressedReason={incompleteNote}
               />
             </div>

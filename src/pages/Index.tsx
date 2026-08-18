@@ -92,6 +92,7 @@ import { PnlDashboard } from "@/components/dashboard/PnlDashboard";
 import { ApiAdvertisedProductsDashboard } from "@/components/ppc-analytics/ApiAdvertisedProductsDashboard";
 import { InventoryPlannerDashboard } from "@/components/dashboard/InventoryPlannerDashboard";
 import { MonthlyPerformanceView } from "@/components/dashboard/MonthlyPerformanceView";
+import { useChartMetrics } from "@/hooks/useChartMetrics";
 import { useAccountTags } from "@/hooks/useAccountTags";
 import { AccountTagBadges } from "@/components/dashboard/AccountTagBadges";
 import { MonthlyPerformanceTable } from "@/components/dashboard/MonthlyPerformanceTable";
@@ -207,7 +208,7 @@ const Index = () => {
     "yellow",
     "red",
   ]);
-  const [selectedChartMetrics, setSelectedChartMetrics] = useState<string[]>(["unitsSold"]);
+  const { selectedChartMetrics, toggleChartMetric } = useChartMetrics();
   const [useHybridData, setUseHybridData] = useState(() => {
     const saved = localStorage.getItem("dashboard_use_hybrid_data");
     return saved === "true";
@@ -990,13 +991,6 @@ const Index = () => {
     updatedAccounts.sort((a, b) => a.name.localeCompare(b.name));
     setAccounts(updatedAccounts);
     setEditingAccount(null);
-  };
-
-  // Toggle chart metric selection
-  const toggleChartMetric = (metricKey: string) => {
-    setSelectedChartMetrics((prev) =>
-      prev.includes(metricKey) ? prev.filter((m) => m !== metricKey) : [...prev, metricKey],
-    );
   };
 
   // Update account data

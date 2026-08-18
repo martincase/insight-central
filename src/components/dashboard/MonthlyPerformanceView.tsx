@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
@@ -10,6 +10,8 @@ import { supabase } from '@/integrations/supabase/client';
 import { getDateDisplayText } from '@/utils/dateUtils';
 import { hybridDataService } from '@/utils/hybridDataService';
 import { isVendorAccount } from '@/utils/vendorUtils';
+import { DEFAULT_CHART_METRICS, isMetricPlottable } from '@/hooks/useChartMetrics';
+import { X } from 'lucide-react';
 
 const VENDOR_LAG_DAYS = 3;
 
@@ -26,6 +28,7 @@ interface MonthlyData {
   clicks: number;
   cpc: number;
   ctr: number;
+  cpa: number;
   pageViews: number;
   buyBoxPercentage: number;
   conversionRate: number;
@@ -40,7 +43,22 @@ interface MetricConfig {
   icon: React.ComponentType<{ className?: string }>;
   isPercentage?: boolean;
   category: 'volume' | 'financial' | 'rate';
+  /**
+   * How the series is drawn. Everything is a filled curve unless it says
+   * otherwise — bars are reserved for the one series that is raw ad exposure
+   * rather than an outcome, so it reads as backdrop and never as a trend line.
+   */
+  chartType?: 'area' | 'bar';
 }
+
+/**
+ * Fill opacity for the first curve, stepping down for each one stacked on top.
+ * Solid blocks at a single opacity turn to mud at three series; the floor stops
+ * the fourth and fifth from disappearing altogether.
+ */
+const AREA_FILL_OPACITY_TOP = 0.32;
+const AREA_FILL_OPACITY_STEP = 0.05;
+const AREA_FILL_OPACITY_FLOOR = 0.16;
 
 const getMetrics = (merchantToken: string): MetricConfig[] => [
   { 
@@ -93,13 +111,21 @@ const getMetrics = (merchantToken: string): MetricConfig[] => [
     isPercentage: true,
     category: 'rate'
   },
-  { 
-    key: 'impressions', 
-    label: 'Impressions', 
-    format: formatNumber, 
-    color: '#8B5CF6', 
+  {
+    // Labelled 'PPC Impressions' to match the KPI card it is toggled from.
+    // These are advertising impressions only — there is no organic impression
+    // figure in any of the feeds, and calling it plain 'Impressions' invited
+    // clients to read it as total exposure.
+    key: 'impressions',
+    label: 'PPC Impressions',
+    format: formatNumber,
+    // Deliberately the one neutral in the palette. Impressions are the backdrop
+    // the outcome curves are read against, so they get a colour no line series
+    // uses and no client will mistake for money.
+    color: '#94A3B8',
     icon: Eye,
-    category: 'volume'
+    category: 'volume',
+    chartType: 'bar'
   },
   { 
     key: 'clicks', 
@@ -126,8 +152,25 @@ const getMetrics = (merchantToken: string): MetricConfig[] => [
     isPercentage: true,
     category: 'rate'
   },
-  { 
-    key: 'pageViews', 
+  {
+    // The CPA card in MetricsGrid has always been clickable but there was no
+    // series behind it, so the card highlighted and the chart did nothing.
+    //
+    // Named for its actual denominator. MetricsGrid divides spend by PPC orders
+    // when the Ads API is answering and falls back to total units ordered when
+    // it is not; this view only ever has total units, so the series is spend ÷
+    // units sold and says so rather than borrowing the card's bare "CPA".
+    key: 'cpa',
+    label: 'CPA (per unit sold)',
+    format: (value: number) => formatCurrencyByMerchantToken(value, merchantToken),
+    // The deep end of the warm/cost family — grouped with PPC spend by hue,
+    // separated from it by value so the two can be read side by side.
+    color: '#B45309',
+    icon: DollarSign,
+    category: 'financial'
+  },
+  {
+    key: 'pageViews',
     label: 'Page Views', 
     format: formatNumber, 
     color: '#EC4899', 
@@ -400,7 +443,7 @@ const fetchHistoricalData = async (
               month: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
               year: date.getFullYear(),
               sales: 0, unitsSold: 0, ppcSpend: 0, ppcSales: 0, acos: 0, tacos: 0,
-              impressions: 0, clicks: 0, cpc: 0, ctr: 0, pageViews: 0,
+              impressions: 0, clicks: 0, cpc: 0, ctr: 0, cpa: 0, pageViews: 0,
               buyBoxPercentage: 0, conversionRate: 0, advertisingReliance: 0,
             };
           }
@@ -440,7 +483,7 @@ const fetchHistoricalData = async (
             monthlyData[monthKey] = {
               month: monthName, year: date.getFullYear(),
               sales: 0, unitsSold: 0, ppcSpend: 0, ppcSales: 0, acos: 0, tacos: 0,
-              impressions: 0, clicks: 0, cpc: 0, ctr: 0, pageViews: 0,
+              impressions: 0, clicks: 0, cpc: 0, ctr: 0, cpa: 0, pageViews: 0,
               buyBoxPercentage: 0, conversionRate: 0, advertisingReliance: 0,
             };
           }
@@ -516,6 +559,7 @@ const fetchHistoricalData = async (
               clicks: 0,
               cpc: 0,
               ctr: 0,
+              cpa: 0,
               pageViews: 0,
               buyBoxPercentage: 0,
               conversionRate: 0,
@@ -557,6 +601,10 @@ const fetchHistoricalData = async (
           data.tacos = data.sales > 0 ? (data.ppcSpend / data.sales) * 100 : 0;
           data.cpc = data.clicks > 0 ? data.ppcSpend / data.clicks : 0;
           data.ctr = data.impressions > 0 ? (data.clicks / data.impressions) * 100 : 0;
+          // Ad spend per unit sold. No feed behind this view reports PPC orders,
+          // so total units is the denominator — the same fallback MetricsGrid
+          // uses when the Ads API is not answering.
+          data.cpa = data.unitsSold > 0 ? data.ppcSpend / data.unitsSold : 0;
           data.advertisingReliance = data.sales > 0 ? (data.ppcSales / data.sales) * 100 : 0;
           return data;
         });
@@ -587,6 +635,7 @@ const fetchHistoricalData = async (
               clicks: 0,
               cpc: 0,
               ctr: 0,
+              cpa: 0,
               pageViews: 0,
               buyBoxPercentage: 0,
               conversionRate: 0,
@@ -635,6 +684,10 @@ const fetchHistoricalData = async (
           data.tacos = data.sales > 0 ? (data.ppcSpend / data.sales) * 100 : 0;
           data.cpc = data.clicks > 0 ? data.ppcSpend / data.clicks : 0;
           data.ctr = data.impressions > 0 ? (data.clicks / data.impressions) * 100 : 0;
+          // Ad spend per unit sold. No feed behind this view reports PPC orders,
+          // so total units is the denominator — the same fallback MetricsGrid
+          // uses when the Ads API is not answering.
+          data.cpa = data.unitsSold > 0 ? data.ppcSpend / data.unitsSold : 0;
           data.advertisingReliance = data.sales > 0 ? (data.ppcSales / data.sales) * 100 : 0;
           return data;
         });
@@ -883,6 +936,7 @@ const processGoogleSheetsData = (
             clicks: 0,
             cpc: 0,
             ctr: 0,
+            cpa: 0,
             pageViews: 0,
             buyBoxPercentage: 0,
             conversionRate: 0,
@@ -917,6 +971,10 @@ const processGoogleSheetsData = (
           data.tacos = data.sales > 0 ? (data.ppcSpend / data.sales) * 100 : 0;
           data.cpc = data.clicks > 0 ? data.ppcSpend / data.clicks : 0;
           data.ctr = data.impressions > 0 ? (data.clicks / data.impressions) * 100 : 0;
+          // Ad spend per unit sold. No feed behind this view reports PPC orders,
+          // so total units is the denominator — the same fallback MetricsGrid
+          // uses when the Ads API is not answering.
+          data.cpa = data.unitsSold > 0 ? data.ppcSpend / data.unitsSold : 0;
           data.advertisingReliance = data.sales > 0 ? (data.ppcSales / data.sales) * 100 : 0;
           return data;
         });
@@ -949,6 +1007,7 @@ const processGoogleSheetsData = (
             clicks: 0,
             cpc: 0,
             ctr: 0,
+            cpa: 0,
             pageViews: 0,
             buyBoxPercentage: 0,
             conversionRate: 0,
@@ -983,6 +1042,10 @@ const processGoogleSheetsData = (
           data.tacos = data.sales > 0 ? (data.ppcSpend / data.sales) * 100 : 0;
           data.cpc = data.clicks > 0 ? data.ppcSpend / data.clicks : 0;
           data.ctr = data.impressions > 0 ? (data.clicks / data.impressions) * 100 : 0;
+          // Ad spend per unit sold. No feed behind this view reports PPC orders,
+          // so total units is the denominator — the same fallback MetricsGrid
+          // uses when the Ads API is not answering.
+          data.cpa = data.unitsSold > 0 ? data.ppcSpend / data.unitsSold : 0;
           data.advertisingReliance = data.sales > 0 ? (data.ppcSales / data.sales) * 100 : 0;
           return data;
         });
@@ -1027,13 +1090,32 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
 }) => {
   const [data, setData] = useState<MonthlyData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [internalSelectedMetrics, setInternalSelectedMetrics] = useState<string[]>(['unitsSold']);
+  const [internalSelectedMetrics, setInternalSelectedMetrics] = useState<string[]>(DEFAULT_CHART_METRICS);
 
   // Get metrics with proper currency formatting
   const METRICS = getMetrics(merchantToken || '');
-  
+
   // Define selectedMetrics before useEffect to avoid reference issues
-  const selectedMetrics = externalSelectedMetrics || internalSelectedMetrics;
+  const requestedMetrics = externalSelectedMetrics || internalSelectedMetrics;
+
+  // Vendor accounts have no advertising feed — the vendor path above writes a
+  // literal 0 for impressions — so the series is dropped rather than drawn as a
+  // flat zero bar a client would read as a broken chart. Filtering here, not in
+  // the pages, keeps the underlying selection intact: switch back to a seller
+  // account and impressions comes straight back.
+  const isVendor = isVendorAccount(merchantToken);
+  const selectedMetrics = useMemo(
+    () => requestedMetrics.filter(key => isMetricPlottable(key, isVendor)),
+    [requestedMetrics, isVendor]
+  );
+
+  /** Bars are drawn first so they sit behind the filled curves, never over them. */
+  const barMetrics = selectedMetrics.filter(
+    key => METRICS.find(m => m.key === key)?.chartType === 'bar'
+  );
+  const areaMetrics = selectedMetrics.filter(
+    key => METRICS.find(m => m.key === key)?.chartType !== 'bar'
+  );
 
   useEffect(() => {
     const loadData = async () => {
@@ -1053,8 +1135,8 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
       let historicalData: MonthlyData[] = [];
       
       // For vendor accounts, always use direct Supabase query (no Google Sheets or hybrid data)
-      const isVendor = isVendorAccount(merchantToken);
-      
+      // — isVendor is computed once at component scope.
+
       // Priority 1: Use external Google Sheets data if available (same as heatmap) — skip for vendors
       if (
         !isVendor &&
@@ -1166,6 +1248,35 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
           </div>
         </CardHeader>
         <CardContent>
+          {/* The selection, made visible and reversible in one place.
+              Until now the only sign a KPI card had been added was an "Added to
+              chart" label on the card itself, so removing a series meant
+              scrolling back up and remembering which card had set it. */}
+          <div className="flex items-center gap-2 flex-wrap mb-3">
+            {selectedMetrics.map(metricKey => {
+              const metric = METRICS.find(m => m.key === metricKey);
+              if (!metric) return null;
+              return (
+                <button
+                  key={metricKey}
+                  type="button"
+                  onClick={() => toggleMetric(metricKey)}
+                  title={`Remove ${metric.label} from the chart`}
+                  className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full border border-border bg-background text-xs transition hover:bg-muted/60"
+                >
+                  <span className="h-2 w-2 rounded-full" style={{ backgroundColor: metric.color }} />
+                  {metric.label}
+                  <X className="h-3 w-3 text-muted-foreground" />
+                </button>
+              );
+            })}
+            <span className="text-xs text-muted-foreground">
+              {selectedMetrics.length > 0
+                ? 'Click a chip to remove it, or any KPI card above to add one'
+                : 'Click any KPI card above to plot it here'}
+            </span>
+          </div>
+
           {isLoading ? (
             <div className="h-[400px] flex items-center justify-center">
               <div className="text-center">
@@ -1192,18 +1303,6 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
             <div className="h-[400px] w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 40 }}>
-                  <defs>
-                    {selectedMetrics.map(metricKey => {
-                      const metric = METRICS.find(m => m.key === metricKey);
-                      if (!metric) return null;
-                      return (
-                        <linearGradient key={metricKey} id={`gradient-${metricKey}`} x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor={metric.color} stopOpacity={0.8}/>
-                          <stop offset="95%" stopColor={metric.color} stopOpacity={0.1}/>
-                        </linearGradient>
-                      );
-                    })}
-                  </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                   <XAxis 
                     dataKey="month" 
@@ -1252,60 +1351,58 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
                       return null;
                     }}
                   />
-                  {selectedMetrics.map((metricKey, index) => {
+                  {/* Bars are emitted before the curves on purpose. Recharts
+                      paints children in source order, so anything declared later
+                      sits on top — impressions is the backdrop the outcome
+                      curves are read against and must never occlude them. */}
+                  {barMetrics.map(metricKey => {
                     const metric = METRICS.find(m => m.key === metricKey);
                     if (!metric) return null;
-                    
-                    // Use bars for impressions, area chart for the first metric, lines for others
-                    if (metricKey === 'impressions') {
-                      return (
-                        <Bar
-                          key={metricKey}
-                          yAxisId={metric.category === 'volume' ? 'left' : 'right'}
-                          dataKey={metricKey}
-                          fill={metric.color}
-                          fillOpacity={0.6}
-                          stroke={metric.color}
-                          strokeWidth={1}
-                          radius={[4, 4, 0, 0]}
-                        />
-                      );
-                    }
-                    
-                    if (index === 0 && metricKey !== 'impressions') {
-                      return (
-                        <Area
-                          key={metricKey}
-                          yAxisId={metric.category === 'volume' ? 'left' : 'right'}
-                          type="monotone"
-                          dataKey={metricKey}
-                          stroke={metric.color}
-                          strokeWidth={3}
-                          fill={`url(#gradient-${metricKey})`}
-                          dot={{ fill: metric.color, strokeWidth: 2, stroke: 'white', r: 4 }}
-                          activeDot={{ r: 6, fill: metric.color, strokeWidth: 2, stroke: 'white' }}
-                        />
-                      );
-                    }
-                    
-                    // For additional metrics (not impressions), use lines
-                    if (metricKey !== 'impressions') {
-                      return (
-                        <Area
-                          key={metricKey}
-                          yAxisId={metric.category === 'volume' ? 'left' : 'right'}
-                          type="monotone"
-                          dataKey={metricKey}
-                          stroke={metric.color}
-                          strokeWidth={2}
-                          fill="none"
-                          dot={{ fill: metric.color, strokeWidth: 2, stroke: 'white', r: 3 }}
-                          activeDot={{ r: 5, fill: metric.color, strokeWidth: 2, stroke: 'white' }}
-                        />
-                      );
-                    }
-                    
-                    return null;
+                    return (
+                      <Bar
+                        key={metricKey}
+                        yAxisId={metric.category === 'volume' ? 'left' : 'right'}
+                        dataKey={metricKey}
+                        fill={metric.color}
+                        fillOpacity={0.55}
+                        radius={[4, 4, 0, 0]}
+                      />
+                    );
+                  })}
+
+                  {/* Smooth curve with a flat block of colour beneath it — the
+                      same solid, unshaded feel as the sales heatmap. Gradients
+                      faded to nothing at the baseline, which made two series of
+                      similar height impossible to tell apart. */}
+                  {areaMetrics.map((metricKey, index) => {
+                    const metric = METRICS.find(m => m.key === metricKey);
+                    if (!metric) return null;
+
+                    // Each curve is drawn over the ones before it, so the fills
+                    // get lighter as they stack. The stroke stays fully opaque,
+                    // which is what carries a buried series at three or four on.
+                    const fillOpacity = Math.max(
+                      AREA_FILL_OPACITY_FLOOR,
+                      AREA_FILL_OPACITY_TOP - index * AREA_FILL_OPACITY_STEP
+                    );
+
+                    return (
+                      <Area
+                        key={metricKey}
+                        yAxisId={metric.category === 'volume' ? 'left' : 'right'}
+                        type="monotone"
+                        dataKey={metricKey}
+                        stroke={metric.color}
+                        strokeWidth={2.5}
+                        // The card header has always promised dashed lines for
+                        // percentages; nothing in the chart delivered it.
+                        strokeDasharray={metric.isPercentage ? '5 4' : undefined}
+                        fill={metric.color}
+                        fillOpacity={fillOpacity}
+                        dot={{ fill: metric.color, strokeWidth: 2, stroke: 'white', r: 3 }}
+                        activeDot={{ r: 6, fill: metric.color, strokeWidth: 2, stroke: 'white' }}
+                      />
+                    );
                   })}
                 </ComposedChart>
               </ResponsiveContainer>
