@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, subMonths } from 'date-fns';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { HEATMAP_RAMP, type HeatmapRampStep } from '@/utils/heatmapScale';
 
 interface CalendarDataPoint {
   date: string;
@@ -26,13 +27,26 @@ export const BidChangeHeatmapCalendar = ({ data, loading }: BidChangeHeatmapCale
     return [subMonths(now, 1), now];
   }, []);
 
-  const getIntensity = (count: number): string => {
-    if (count === 0) return 'bg-muted/30';
-    if (count === 1) return 'bg-primary/20';
-    if (count <= 3) return 'bg-primary/40';
-    if (count <= 5) return 'bg-primary/60';
-    return 'bg-primary/80';
+  /**
+   * Counts are bucketed onto the shared five-step ramp rather than mapped through
+   * a linear max, because the max here is one busy day and would flatten every
+   * other day to the palest step. The 1 / 3 / 5 boundaries are the ones this
+   * calendar already used; the extra split at 9 exists so all five steps are in
+   * play instead of only four.
+   *
+   * A day with zero bid changes is NOT missing data — it is a reported quiet day —
+   * so it gets an explicit empty cell, never the hatch the other grids use.
+   */
+  const getCountRamp = (count: number): HeatmapRampStep => {
+    if (count === 1) return HEATMAP_RAMP[0];
+    if (count <= 3) return HEATMAP_RAMP[1];
+    if (count <= 5) return HEATMAP_RAMP[2];
+    if (count <= 9) return HEATMAP_RAMP[3];
+    return HEATMAP_RAMP[4];
   };
+
+  const cellStyle = (count: number) =>
+    count === 0 ? undefined : { backgroundColor: getCountRamp(count).bg };
 
   if (loading) {
     return (
@@ -86,7 +100,8 @@ export const BidChangeHeatmapCalendar = ({ data, loading }: BidChangeHeatmapCale
                         <Tooltip key={dateStr}>
                           <TooltipTrigger asChild>
                             <div
-                              className={`w-6 h-6 rounded-sm ${getIntensity(count)} cursor-default transition-colors hover:ring-1 hover:ring-primary/50`}
+                              className={`w-6 h-6 rounded-sm cursor-default transition-colors hover:ring-1 hover:ring-primary/50 ${count === 0 ? 'bg-muted/30' : ''}`}
+                              style={cellStyle(count)}
                             />
                           </TooltipTrigger>
                           <TooltipContent side="top" className="text-xs">
@@ -111,11 +126,11 @@ export const BidChangeHeatmapCalendar = ({ data, loading }: BidChangeHeatmapCale
         </TooltipProvider>
         <div className="flex items-center justify-center gap-1 mt-4 text-xs text-muted-foreground">
           <span>Less</span>
-          <div className="w-3 h-3 rounded-sm bg-muted/30" />
-          <div className="w-3 h-3 rounded-sm bg-primary/20" />
-          <div className="w-3 h-3 rounded-sm bg-primary/40" />
-          <div className="w-3 h-3 rounded-sm bg-primary/60" />
-          <div className="w-3 h-3 rounded-sm bg-primary/80" />
+          {/* Leading empty swatch is "no bid changes", not "no data" — see getCountRamp. */}
+          <div className="w-3 h-3 rounded-sm bg-muted/30" title="No bid changes" />
+          {HEATMAP_RAMP.map(step => (
+            <div key={step.bg} className="w-3 h-3 rounded-sm" style={{ backgroundColor: step.bg }} />
+          ))}
           <span>More</span>
         </div>
       </CardContent>

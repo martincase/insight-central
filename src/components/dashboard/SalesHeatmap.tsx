@@ -14,6 +14,8 @@ import { calculateVendorPeriodData } from '@/utils/vendorProcessor';
 import { ColumnMappingDialog } from './ColumnMappingDialog';
 import { AccountTagBadges } from './AccountTagBadges';
 import type { TagInfo } from '@/hooks/useAccountTags';
+import { HeatmapLegend } from './HeatmapLegend';
+import { getHeatmapCellStyle, heatmapIntensity, isInverseHeatmapMetric } from '@/utils/heatmapScale';
 
 interface SalesHeatmapProps {
   accounts: AccountData[];
@@ -47,58 +49,11 @@ const METRIC_OPTIONS = [
 
 const VENDOR_EXCLUDED_METRICS = ['pageViews', 'buyBoxPercentage', 'conversionRate'];
 
-/**
- * Accessible monochrome-blue heatmap ramp.
- *
- * Kept deliberately monochrome (safe for deuteranopia / protanopia). The ramp is
- * spread across the widest usable luminance range (relative luminance 0.81 -> 0.05,
- * i.e. an 8.5:1 span, vs the previous blue-100 -> blue-500 span of 3.0:1) so that
- * adjacent steps are as separable as a 5-step sequential scale can be.
- *
- * Ink is chosen per step so every cell's label clears WCAG AA (4.5:1):
- *   #dbeafe + #0a1633 = 14.6:1
- *   #7bb6fc + #0a1633 =  8.5:1
- *   #3b82f6 + #0a1633 =  4.9:1
- *   #2055df + #ffffff =  6.1:1
- *   #1e3a8a + #ffffff = 10.4:1
- */
-const HEATMAP_INK_DARK = '#0a1633';
-const HEATMAP_INK_LIGHT = '#ffffff';
-
-const HEATMAP_RAMP: { bg: string; fg: string; label: string }[] = [
-  { bg: '#dbeafe', fg: HEATMAP_INK_DARK, label: 'weakest' },
-  { bg: '#7bb6fc', fg: HEATMAP_INK_DARK, label: 'weak' },
-  { bg: '#3b82f6', fg: HEATMAP_INK_DARK, label: 'mid' },
-  { bg: '#2055df', fg: HEATMAP_INK_LIGHT, label: 'strong' },
-  { bg: '#1e3a8a', fg: HEATMAP_INK_LIGHT, label: 'strongest' },
-];
-
-// "No data" is encoded with a diagonal hatch, NOT just a pale colour, so an empty
-// day can never be mistaken for a bad day. Ink clears 4.5:1 on both the base and
-// the hatch lines (13.4:1 and 5.7:1).
-const HEATMAP_NO_DATA_STYLE: React.CSSProperties = {
-  backgroundColor: '#f1f5f9',
-  backgroundImage:
-    'repeating-linear-gradient(45deg, #94a3b8 0, #94a3b8 1px, transparent 1px, transparent 6px)',
-  color: '#1e293b',
-};
-
-/**
- * `hasValue` must drive the hatch, NOT `intensity === 0`. For the inverse metrics
- * (ACOS / TACOS) intensity is `1 - value/max`, so the single WORST day in the window
- * lands on exactly 0 — which would paint a real, reported, bad day as "no data".
- */
-const getCellStyle = (intensity: number, hasValue: boolean): React.CSSProperties => {
-  if (!hasValue) return HEATMAP_NO_DATA_STYLE;
-  const i = Number.isFinite(intensity) ? Math.min(Math.max(intensity, 0), 1) : 0;
-  const idx = i < 0.2 ? 0 : i < 0.4 ? 1 : i < 0.6 ? 2 : i < 0.8 ? 3 : 4;
-  const step = HEATMAP_RAMP[idx];
-  return { backgroundColor: step.bg, color: step.fg };
-};
-
-// Metrics where lower values = better performance
-const INVERSE_METRICS: MetricType[] = ['acos', 'tacos'];
-const isInverseMetric = (metric: MetricType) => INVERSE_METRICS.includes(metric);
+// The ramp, the hatch and the inversion rule live in utils/heatmapScale so every
+// heatmap in the app reads off one scale. Nothing about the rendered output of
+// this grid changed when they moved out of this file.
+const getCellStyle = getHeatmapCellStyle;
+const isInverseMetric = (metric: MetricType) => isInverseHeatmapMetric(metric);
 
 // Define PPC and Organic metrics for filtering
 const PPC_METRICS: MetricType[] = ['ppcSpend', 'ppcSales', 'acos', 'tacos'];
@@ -642,14 +597,11 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
     const inverse = isInverseMetric(selectedMetric);
     return {
       account,
-      dailyMetrics: periodMetrics.map(d => {
-        const raw = d.value / maxValue;
-        return {
-          ...d,
-          intensity: d.value === 0 ? 0 : (inverse ? 1 - raw : raw),
-          isInverse: inverse,
-        };
-      }),
+      dailyMetrics: periodMetrics.map(d => ({
+        ...d,
+        intensity: heatmapIntensity(d.value, maxValue, inverse),
+        isInverse: inverse,
+      })),
       maxValue
     };
   };
@@ -782,15 +734,12 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
     const inverse = isInverseMetric(metric.value as MetricType);
     return {
       metric,
-      dailyMetrics: periodMetrics.map(d => {
-        const raw = d.value / maxValue;
-        // Always store raw intensity (0-1), inverted for cost metrics so darker blue = better.
-        return {
-          ...d,
-          intensity: d.value === 0 ? 0 : (inverse ? 1 - raw : raw),
-          isInverse: inverse,
-        };
-      }),
+      // Always store raw intensity (0-1), inverted for cost metrics so darker blue = better.
+      dailyMetrics: periodMetrics.map(d => ({
+        ...d,
+        intensity: heatmapIntensity(d.value, maxValue, inverse),
+        isInverse: inverse,
+      })),
       maxValue
     };
   }) : [];
@@ -949,39 +898,14 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
       <CardContent className="px-2 py-2 md:px-6 md:py-4 min-w-0 max-w-full overflow-hidden">
         {/* Scale key + reversal note sit ABOVE the grid: you need them to read a cell,
             so they must not be 250px further down the page. */}
-        <div className="mb-2 md:mb-3 flex flex-col gap-1.5 text-[11px] md:text-xs text-gray-700">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-            <div className="flex items-center gap-1.5">
-              <span className="text-gray-600">Weaker</span>
-              <div className="flex items-center gap-0.5" role="img" aria-label="Blue intensity scale from weaker to stronger">
-                {HEATMAP_RAMP.map(step => (
-                  <div
-                    key={step.bg}
-                    className="w-3 h-3 md:w-3.5 md:h-3.5 rounded-sm border border-black/10"
-                    style={{ backgroundColor: step.bg }}
-                  />
-                ))}
-              </div>
-              <span className="text-gray-600">Stronger</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <div
-                className="w-3 h-3 md:w-3.5 md:h-3.5 rounded-sm border border-black/10"
-                style={HEATMAP_NO_DATA_STYLE}
-              />
-              <span className="text-gray-600">Hatched = no data</span>
-            </div>
-          </div>
-          <div className="text-gray-700">
-            Darker blue = better. For <strong className="font-semibold">ACOS &amp; TACOS lower is better</strong>, so the lowest values are the darkest blue.
-          </div>
+        <HeatmapLegend>
           {rangeLabel && (
             <div className="text-gray-600">
               Showing {rangeLabel}
               {coverageNote ? <span className="text-amber-700 font-medium"> · {coverageNote}</span> : null}
             </div>
           )}
-        </div>
+        </HeatmapLegend>
 
         <div className="space-y-2 w-full max-w-full overflow-x-auto overscroll-x-contain">
           {isFocusedMode ? (

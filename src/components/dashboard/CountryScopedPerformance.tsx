@@ -18,6 +18,8 @@ import { buildComparisonLabel } from '@/utils/comparisonLabels';
 import { describeMissingDates } from '@/utils/kpiIntegrity';
 import { AlertTriangle } from 'lucide-react';
 import type { DateFilter } from '@/types/dashboard';
+import { HeatmapLegend } from './HeatmapLegend';
+import { getHeatmapCellStyle, heatmapIntensity, isInverseHeatmapMetric } from '@/utils/heatmapScale';
 
 interface Props {
   spid: string;
@@ -63,7 +65,7 @@ export function CountryScopedPerformance({
 
   // Single scoped source, shared with the KPI grid so the two cannot disagree.
   const scopedMetrics = useScopedMetrics(spid, scope, dateFilter, customDateRange);
-  const { totals, previousTotals, series, days, completeness, loading, error: scopeError } = scopedMetrics;
+  const { totals, previousTotals, series, days, dayHasData, completeness, loading, error: scopeError } = scopedMetrics;
 
   // See MetricsGrid: a period the feed only half covers is not a period. The
   // total is qualified, the comparison and any ads-over-sales ratio withheld.
@@ -143,6 +145,16 @@ export function CountryScopedPerformance({
     const pct = (u / s) * 100;
     return pct > 100 ? 0 : pct; // impossible values are not plotted
   });
+  // Conversion has two ways of holding no figure that are NOT a 0% conversion:
+  // no session denominator at all, and a denominator that produced an impossible
+  // rate. Both must hatch. A day that really did convert nobody is a reported 0%
+  // and stays on the ramp.
+  const conversionHasValue = conversionUnitsSpark.map((u, i) => {
+    if (!dayHasData[i]) return false;
+    const s = sessionsSpark[i] || 0;
+    if (s <= 0) return false;
+    return (u / s) * 100 <= 100;
+  });
 
   const totalSales = totals?.sales ?? 0;
   const totalUnits = totals?.unitsOrdered ?? 0;
@@ -187,11 +199,56 @@ export function CountryScopedPerformance({
 
   const fmtPct = (v: number) => `${(v ?? 0).toFixed(1)}%`;
 
-  const shadeColor = (ratio: number, base: string) => {
-    // ratio 0..1
-    const alpha = Math.max(0.08, Math.min(1, ratio));
-    return `${base}${Math.round(alpha * 255).toString(16).padStart(2, '0')}`;
-  };
+  /**
+   * Rows of the Daily Performance grid.
+   *
+   * `metric` is the scale's identifier for the row, not the on-screen label — the
+   * label changes with the account arm ("Conversion % (seller arm)"), and the
+   * inversion hook must not depend on wording. Nothing here is an inverse metric
+   * today (ads are not split by marketplace, so ACOS/TACOS cannot be built at
+   * country level); the hook is wired so that a cost row added later inverts on
+   * its own instead of quietly rendering upside down.
+   *
+   * `has` is per-day, aligned with `days`: false means nothing was reported, and
+   * the cell hatches. It is NOT `value > 0` — a day that genuinely sold nothing
+   * is a fact, and must not be dressed as a gap.
+   */
+  const heatmapRows: {
+    label: string;
+    metric: string;
+    spark: number[];
+    max: number;
+    fmt: (v: number) => string;
+    has: boolean[];
+  }[] = [
+    { label: 'Sales', metric: 'sales', spark: salesSpark, max: maxSales, fmt: fmtMoney, has: dayHasData },
+    { label: 'Units', metric: 'units', spark: unitsSpark, max: maxUnits, fmt: fmtNum, has: dayHasData },
+    {
+      label: !totals?.hasSessions
+        ? 'Glance views'
+        : totals.mixedArms
+          ? 'Page views (browser) + glance views'
+          : 'Page views (browser)',
+      metric: 'pageViews', spark: pageViewsSpark, max: maxPageViews, fmt: fmtNum, has: dayHasData,
+    },
+    ...(totals?.hasSessions
+      ? [{
+          label: 'Sessions (all devices)', metric: 'sessions',
+          spark: sessionsSpark, max: Math.max(1, ...sessionsSpark), fmt: fmtNum, has: dayHasData,
+        }]
+      : []),
+    { label: 'Buy Box %', metric: 'buyBox', spark: buyBoxSpark, max: maxBuyBox, fmt: fmtPct, has: dayHasData },
+    // Blank for vendors and for any day where units exceed sessions.
+    ...(totals?.hasSessions
+      ? [{
+          label: totals.mixedArms ? 'Conversion % (seller arm)' : 'Conversion %',
+          metric: 'conversion',
+          spark: conversionSpark, max: maxConversion, fmt: fmtPct, has: conversionHasValue,
+        }]
+      : []),
+  ];
+
+  const anyInverseRow = heatmapRows.some(r => isInverseHeatmapMetric(r.metric));
 
   const sortedAsins = useMemo(() => {
     const rows = asinRows || [];
@@ -266,6 +323,10 @@ export function CountryScopedPerformance({
             ) : days.length === 0 ? (
               <p className="text-sm text-muted-foreground">No data in range.</p>
             ) : (
+              <>
+              {/* Same key as every other heatmap in the app — it has to be above
+                  the grid, you need it to read a cell. */}
+              <HeatmapLegend showInverseNote={anyInverseRow} />
               <div className="overflow-x-auto">
                 <table className="min-w-full text-xs border-separate border-spacing-0">
                   <thead>
@@ -280,45 +341,40 @@ export function CountryScopedPerformance({
                     </tr>
                   </thead>
                   <tbody>
-                    {[
-                      { label: 'Sales', spark: salesSpark, max: maxSales, base: '#2563EB', fmt: fmtMoney },
-                      { label: 'Units', spark: unitsSpark, max: maxUnits, base: '#10B981', fmt: fmtNum },
-                      {
-                        label: !totals?.hasSessions
-                          ? 'Glance views'
-                          : totals.mixedArms
-                            ? 'Page views (browser) + glance views'
-                            : 'Page views (browser)',
-                        spark: pageViewsSpark, max: maxPageViews, base: '#2563EB', fmt: fmtNum,
-                      },
-                      ...(totals?.hasSessions ? [{ label: 'Sessions (all devices)', spark: sessionsSpark, max: Math.max(1, ...sessionsSpark), base: '#2563EB', fmt: fmtNum }] : []),
-                      { label: 'Buy Box %', spark: buyBoxSpark, max: maxBuyBox, base: '#10B981', fmt: fmtPct },
-                      // Blank for vendors and for any day where units exceed sessions.
-                      ...(totals?.hasSessions
-                        ? [{
-                            label: totals.mixedArms ? 'Conversion % (seller arm)' : 'Conversion %',
-                            spark: conversionSpark, max: maxConversion, base: '#10B981', fmt: fmtPct,
-                          }]
-                        : []),
-                    ].map(row => (
-                      <tr key={row.label}>
-                        <td className="p-2 font-medium sticky left-0 bg-background z-10">{row.label}</td>
-                        {row.spark.map((v, i) => (
-                          <td key={i} className="p-1 text-center">
-                            <div
-                              className="rounded px-1 py-1 text-[11px] font-medium"
-                              style={{ backgroundColor: shadeColor(v / row.max, row.base), color: (v / row.max) > 0.55 ? '#fff' : 'inherit' }}
-                              title={row.fmt(v)}
-                            >
-                              {v > 0 ? row.fmt(v) : '—'}
-                            </div>
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
+                    {heatmapRows.map(row => {
+                      const inverse = isInverseHeatmapMetric(row.metric);
+                      return (
+                        <tr key={row.label}>
+                          <td className="p-2 font-medium sticky left-0 bg-background z-10">{row.label}</td>
+                          {/* Iterate the DAYS, not the series. When the feed returned
+                              nothing at all the series are empty, and mapping them
+                              rendered a header row of dates above a row of no cells.
+                              A window with no data is a fully hatched row. */}
+                          {days.map((d, i) => {
+                            const v = row.spark[i] ?? 0;
+                            const hasValue = row.has[i] ?? false;
+                            const dayLabel = format(d, 'EEE d MMM');
+                            return (
+                              <td key={i} className="p-1 text-center">
+                                <div
+                                  className="rounded px-1 py-1 text-[11px] font-medium"
+                                  style={getHeatmapCellStyle(heatmapIntensity(v, row.max, inverse), hasValue)}
+                                  title={hasValue
+                                    ? `${row.label} — ${dayLabel}: ${row.fmt(v)}`
+                                    : `${row.label} — ${dayLabel}: not reported`}
+                                >
+                                  {hasValue ? row.fmt(v) : '—'}
+                                </div>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
+              </>
             )}
           </CardContent>
         </Card>
