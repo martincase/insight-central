@@ -93,6 +93,15 @@ export interface UseScopedMetricsResult {
   previousTotals: ScopedTotals | null;
   series: ScopedSeries;
   days: Date[];
+  /**
+   * Per-day, aligned with `days`: did the feed produce a row for that day at all?
+   *
+   * The series fill an absent day with 0, which makes a genuinely zero-sales day
+   * and a day the feed never delivered look identical. Anything that shades a
+   * cell has to be able to tell them apart — `completeness.missingDates` cannot
+   * be used for this, it caps at eight entries for prose.
+   */
+  dayHasData: boolean[];
   /** How much of the selected window the sales series actually covers. */
   completeness: DataCompleteness;
   loading: boolean;
@@ -288,6 +297,13 @@ export function useScopedMetrics(
     };
   }, [daily, days, byDay, single]);
 
+  // Built from the same byDay map the series are, so a cell can never be told
+  // "no data" for a day the series drew a figure from, or vice versa.
+  const dayHasData = useMemo(
+    () => days.map((d) => byDay.has(format(d, 'yyyy-MM-dd'))),
+    [days, byDay],
+  );
+
   const totals = useMemo(() => summarise(daily), [daily]);
   const previousTotals = useMemo(() => summarise(prev), [prev]);
 
@@ -299,5 +315,5 @@ export function useScopedMetrics(
     return assessCompleteness(days, byDay.keys());
   }, [loading, error, spid, scope, days, byDay]);
 
-  return { daily, totals, previousTotals, series, days, completeness, loading, error };
+  return { daily, totals, previousTotals, series, days, dayHasData, completeness, loading, error };
 }
