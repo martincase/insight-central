@@ -3,7 +3,7 @@ import type { ApiPpcDailyRow } from '@/hooks/useApiPpcData';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { format, subDays, eachDayOfInterval, subWeeks, startOfWeek, endOfWeek, eachWeekOfInterval, startOfMonth, endOfMonth, subMonths, startOfYear, differenceInCalendarDays, isToday, isYesterday } from 'date-fns';
+import { format, subDays, eachDayOfInterval, subWeeks, startOfWeek, endOfWeek, eachWeekOfInterval, startOfMonth, endOfMonth, subMonths, startOfYear, differenceInCalendarDays } from 'date-fns';
 import { formatCurrency, formatPercentage } from '@/utils/formatters';
 import { getBlurredDisplayName } from '@/utils/blurUtils';
 import { cn } from '@/lib/utils';
@@ -16,6 +16,7 @@ import { AccountTagBadges } from './AccountTagBadges';
 import type { TagInfo } from '@/hooks/useAccountTags';
 import { HeatmapLegend } from './HeatmapLegend';
 import { getHeatmapCellStyle, heatmapIntensity, isInverseHeatmapMetric } from '@/utils/heatmapScale';
+import { resolveMetricCell, type HeatmapMetric } from '@/utils/heatmapMetricCell';
 
 interface SalesHeatmapProps {
   accounts: AccountData[];
@@ -32,7 +33,10 @@ interface SalesHeatmapProps {
   accountTagsMap?: Record<string, TagInfo[]>;
 }
 
-type MetricType = 'sales' | 'ppcSpend' | 'ppcSales' | 'acos' | 'tacos' | 'unitsOrdered' | 'pageViews' | 'buyBoxPercentage' | 'conversionRate';
+// The metric keys, the three-state cell and the ratio guards live in
+// utils/heatmapMetricCell so the two grids below cannot hold two versions of
+// the rule that decides whether a client is shown a percentage.
+type MetricType = HeatmapMetric;
 type ViewType = 'daily' | 'weekly';
 
 const METRIC_OPTIONS = [
@@ -321,7 +325,12 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
     ? `Data to ${format(lastDataDate, 'd MMM')} — the last ${missingTailDays} ${missingTailDays === 1 ? 'day' : 'days'} of this range ${missingTailDays === 1 ? 'is' : 'are'} not reported yet.`
     : null;
 
-  // Helper function to get PPC data for a given date and account
+  // Helper function to get PPC data for a given date and account.
+  //
+  // `hasData` says whether the ads feed actually produced a row for this day, as
+  // opposed to producing a zero. The two are not the same fact and the grid has
+  // to be able to tell them apart: a day that spent nothing is a reported zero,
+  // a day the feed has not delivered is a gap.
   const getPPCDataForDate = (dateStr: string, account: AccountData) => {
     // If API PPC data is available (focused mode), use it instead of sheet PPC data
     if (apiPpcByDate) {
@@ -330,14 +339,15 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
       if (parts.length === 3) {
         const isoDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
         const apiRow = apiPpcByDate.get(isoDate);
-        return { ppcSpend: apiRow?.ppcSpend || 0, ppcSales: apiRow?.ppcSales || 0 };
+        return { ppcSpend: apiRow?.ppcSpend || 0, ppcSales: apiRow?.ppcSales || 0, hasData: !!apiRow };
       }
     } else {
     }
 
     let ppcSpend = 0;
     let ppcSales = 0;
-    
+    let hasData = false;
+
     if (ppcData.length > 0) {
       for (let i = 1; i < ppcData.length; i++) {
         const row = ppcData[i];
@@ -360,16 +370,21 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
                        (!account.ppcAccountName && ppcAccountName === account.merchantToken);
 
         if (formattedPPCDate === dateStr && isMatch) {
+          hasData = true;
           if (!isNaN(spend)) ppcSpend += spend;
           if (!isNaN(ppcSalesAmount)) ppcSales += ppcSalesAmount;
         }
       }
     }
-    
-    return { ppcSpend, ppcSales };
+
+    return { ppcSpend, ppcSales, hasData };
   };
 
-  // Helper function to get all data (sales + traffic) for a given date and account
+  // Helper function to get all data (sales + traffic) for a given date and account.
+  //
+  // Same contract as getPPCDataForDate: `hasData` is row presence, never
+  // `value > 0`. A shop that sold nothing on a Sunday reported a zero; a day the
+  // sales feed has not landed reported nothing. Only the second is a gap.
   const getAllDataForDate = (dateStr: string, account: AccountData) => {
     // For vendor accounts, use Supabase vendor data first, fall back to Google Sheets
     if (isVendorAccount(account.merchantToken)) {
@@ -391,15 +406,18 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
           pageViews: 0,
           buyBoxPercentage: 0,
           conversionRate: 0,
+          hasData: !!vendorDay,
         };
       }
 
       let sales = 0;
       let unitsOrdered = 0;
+      let hasData = false;
 
       if (isoDateStr) {
         const vendorEntry = vendorAllAccountsMap.get(`${account.merchantToken}|${isoDateStr}`);
         if (vendorEntry) {
+          hasData = true;
           sales = vendorEntry.sales;
           unitsOrdered = vendorEntry.unitsOrdered;
         }
@@ -420,22 +438,24 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
             }
           }
           if (formattedVendorDate === dateStr && accountName === account.merchantToken) {
+            hasData = true;
             if (!isNaN(salesAmount)) sales += salesAmount;
             if (!isNaN(unitsOrderedValue)) unitsOrdered += unitsOrderedValue;
           }
         }
 
       }
-      
+
       return {
         sales,
         unitsOrdered,
         pageViews: 0,
         buyBoxPercentage: 0,
-        conversionRate: 0
+        conversionRate: 0,
+        hasData
       };
     }
-    
+
     // For seller accounts, use sheet data
     let sales = 0;
     let unitsOrdered = 0;
@@ -443,7 +463,8 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
     let buyBoxPercentageSum = 0;
     let conversionRateSum = 0;
     let dataPointsCount = 0;
-    
+    let hasData = false;
+
     for (let i = 1; i < sheetData.length; i++) {
       const row = sheetData[i];
       const rowDateStr = row[1]; // Column B (date)
@@ -467,6 +488,7 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
       }
 
       if (formattedRowDate === dateStr && accountId === account.merchantToken) {
+        hasData = true;
         if (!isNaN(salesAmount)) sales += salesAmount;
         if (!isNaN(unitsOrderedValue)) unitsOrdered += unitsOrderedValue;
         if (!isNaN(pageViewsValue)) pageViews += pageViewsValue;
@@ -483,7 +505,8 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
       unitsOrdered,
       pageViews,
       buyBoxPercentage: dataPointsCount > 0 ? buyBoxPercentageSum / dataPointsCount : 0,
-      conversionRate: dataPointsCount > 0 ? conversionRateSum / dataPointsCount : 0
+      conversionRate: dataPointsCount > 0 ? conversionRateSum / dataPointsCount : 0,
+      hasData
     };
   };
 
@@ -499,7 +522,11 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
       let buyBoxPercentageSum = 0;
       let conversionRateSum = 0;
       let dataPointsCount = 0;
-      
+      // Feed presence, aggregated the same way the figures are: a week has sales
+      // data if any of its days did.
+      let hasSalesData = false;
+      let hasPpcData = false;
+
       if (viewType === 'weekly') {
         // For weekly view, aggregate data for the whole week
         const weekStart = startOfWeek(period, { weekStartsOn: 1 });
@@ -512,15 +539,17 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
           sales += dayData.sales;
           unitsOrdered += dayData.unitsOrdered;
           pageViews += dayData.pageViews;
+          hasSalesData = hasSalesData || dayData.hasData;
           if (dayData.buyBoxPercentage > 0) {
             buyBoxPercentageSum += dayData.buyBoxPercentage;
             dataPointsCount++;
           }
           if (dayData.conversionRate > 0) conversionRateSum += dayData.conversionRate;
-          
+
           const ppcData = getPPCDataForDate(dayStr, account);
           ppcSpend += ppcData.ppcSpend;
           ppcSales += ppcData.ppcSales;
+          hasPpcData = hasPpcData || ppcData.hasData;
         });
       } else {
         // For daily view
@@ -532,55 +561,35 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
         buyBoxPercentageSum = dayData.buyBoxPercentage;
         conversionRateSum = dayData.conversionRate;
         dataPointsCount = dayData.buyBoxPercentage > 0 ? 1 : 0;
-        
-        // For vendor accounts, also get PPC data for this specific date
-        if (isVendorAccount(account.merchantToken)) {
-          const ppcData = getPPCDataForDate(dateStr, account);
-          ppcSpend = ppcData.ppcSpend;
-          ppcSales = ppcData.ppcSales;
-        } else {
-          const ppcData = getPPCDataForDate(dateStr, account);
-          ppcSpend = ppcData.ppcSpend;
-          ppcSales = ppcData.ppcSales;
-        }
+        hasSalesData = dayData.hasData;
+
+        const ppcData = getPPCDataForDate(dateStr, account);
+        ppcSpend = ppcData.ppcSpend;
+        ppcSales = ppcData.ppcSales;
+        hasPpcData = ppcData.hasData;
       }
 
-      // Calculate metric value based on selected metric
-      let metricValue = 0;
-      switch (selectedMetric) {
-        case 'sales':
-          metricValue = sales;
-          break;
-        case 'ppcSpend':
-          metricValue = ppcSpend;
-          break;
-        case 'ppcSales':
-          metricValue = ppcSales;
-          break;
-        case 'acos':
-          metricValue = ppcSales > 0 ? (ppcSpend / ppcSales) * 100 : 0;
-          break;
-        case 'tacos':
-          metricValue = sales > 0 ? (ppcSpend / sales) * 100 : 0;
-          break;
-        case 'unitsOrdered':
-          metricValue = unitsOrdered;
-          break;
-        case 'pageViews':
-          metricValue = pageViews;
-          break;
-        case 'buyBoxPercentage':
-          metricValue = dataPointsCount > 0 ? buyBoxPercentageSum / dataPointsCount : 0;
-          break;
-        case 'conversionRate':
-          metricValue = dataPointsCount > 0 ? conversionRateSum / dataPointsCount : 0;
-          break;
-      }
+      // One resolver for both grids: the ratio guards must not be able to drift
+      // apart between the account view and the focused view.
+      const cell = resolveMetricCell(selectedMetric, {
+        sales,
+        ppcSpend,
+        ppcSales,
+        unitsOrdered,
+        pageViews,
+        buyBoxPercentage: dataPointsCount > 0 ? buyBoxPercentageSum / dataPointsCount : 0,
+        conversionRate: dataPointsCount > 0 ? conversionRateSum / dataPointsCount : 0,
+        hasSalesData,
+        hasPpcData,
+      }, period);
 
       return {
         date: period,
         dateStr: viewType === 'weekly' ? `Week ${format(period, 'dd/MM')}` : format(period, 'dd/MM/yyyy'),
-        value: metricValue,
+        value: cell.value,
+        hasData: cell.hasData,
+        isDefined: cell.isDefined,
+        reason: cell.reason,
         sales,
         ppcSpend,
         ppcSales,
@@ -649,6 +658,8 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
       let buyBoxPercentageSum = 0;
       let conversionRateSum = 0;
       let dataPointsCount = 0;
+      let hasSalesData = false;
+      let hasPpcData = false;
 
       if (viewType === 'weekly') {
         // For weekly view, aggregate data for the whole week
@@ -662,15 +673,17 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
           sales += dayData.sales;
           unitsOrdered += dayData.unitsOrdered;
           pageViews += dayData.pageViews;
+          hasSalesData = hasSalesData || dayData.hasData;
           if (dayData.buyBoxPercentage > 0) {
             buyBoxPercentageSum += dayData.buyBoxPercentage;
             dataPointsCount++;
           }
           if (dayData.conversionRate > 0) conversionRateSum += dayData.conversionRate;
-          
+
           const ppcDataResult = getPPCDataForDate(dayStr, account);
           ppcSpend += ppcDataResult.ppcSpend;
           ppcSales += ppcDataResult.ppcSales;
+          hasPpcData = hasPpcData || ppcDataResult.hasData;
         });
       } else {
         // For daily view
@@ -682,49 +695,34 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
         buyBoxPercentageSum = dayData.buyBoxPercentage;
         conversionRateSum = dayData.conversionRate;
         dataPointsCount = dayData.buyBoxPercentage > 0 ? 1 : 0;
-        
+        hasSalesData = dayData.hasData;
+
         // Get PPC data for this specific date
         const ppcDataResult = getPPCDataForDate(dateStr, account);
         ppcSpend = ppcDataResult.ppcSpend;
         ppcSales = ppcDataResult.ppcSales;
+        hasPpcData = ppcDataResult.hasData;
       }
 
-      // Calculate metric value
-      let metricValue = 0;
-      switch (metric.value) {
-        case 'sales':
-          metricValue = sales;
-          break;
-        case 'ppcSpend':
-          metricValue = ppcSpend;
-          break;
-        case 'ppcSales':
-          metricValue = ppcSales;
-          break;
-        case 'acos':
-          metricValue = ppcSales > 0 ? (ppcSpend / ppcSales) * 100 : 0;
-          break;
-        case 'tacos':
-          metricValue = sales > 0 ? (ppcSpend / sales) * 100 : 0;
-          break;
-        case 'unitsOrdered':
-          metricValue = unitsOrdered;
-          break;
-        case 'pageViews':
-          metricValue = pageViews;
-          break;
-        case 'buyBoxPercentage':
-          metricValue = dataPointsCount > 0 ? buyBoxPercentageSum / dataPointsCount : 0;
-          break;
-        case 'conversionRate':
-          metricValue = dataPointsCount > 0 ? conversionRateSum / dataPointsCount : 0;
-          break;
-      }
+      const cell = resolveMetricCell(metric.value, {
+        sales,
+        ppcSpend,
+        ppcSales,
+        unitsOrdered,
+        pageViews,
+        buyBoxPercentage: dataPointsCount > 0 ? buyBoxPercentageSum / dataPointsCount : 0,
+        conversionRate: dataPointsCount > 0 ? conversionRateSum / dataPointsCount : 0,
+        hasSalesData,
+        hasPpcData,
+      }, period);
 
       return {
         date: period,
         dateStr: viewType === 'weekly' ? `Week ${format(period, 'dd/MM')}` : format(period, 'dd/MM/yyyy'),
-        value: metricValue
+        value: cell.value,
+        hasData: cell.hasData,
+        isDefined: cell.isDefined,
+        reason: cell.reason
       };
     });
 
@@ -744,19 +742,21 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
     };
   }) : [];
 
-  const PENDING_ELIGIBLE_METRICS: MetricType[] = ['pageViews', 'buyBoxPercentage', 'conversionRate'];
+  /**
+   * Two placeholders, one meaning each, and they are used nowhere else:
+   *   —    nothing was reported (the cell is hatched, and the key says so)
+   *   N/A  the day WAS reported but the figure cannot be computed from it
+   * The grid used to emit '-' in some places and '—' in others for the same
+   * state, which left a reader deciding whether the difference meant something.
+   */
+  const NOT_REPORTED = '—';
+  const NOT_COMPUTABLE = 'N/A';
 
-  const formatMetricValue = (value: number, metric: MetricType, date?: Date) => {
-    if (value === 0) {
-      // Recent dates on lagging metrics: render muted em-dash (tooltip explains)
-      if (date && PENDING_ELIGIBLE_METRICS.includes(metric) && (isToday(date) || isYesterday(date))) {
-        return '—';
-      }
-      return '-';
-    }
-    
-    if (metric === 'conversionRate' && value > 100) return '—';
+  const formatMetricValue = (cell: { value: number; hasData: boolean; isDefined: boolean }, metric: MetricType) => {
+    if (!cell.hasData) return NOT_REPORTED;
+    if (!cell.isDefined) return NOT_COMPUTABLE;
 
+    const value = cell.value;
     switch (metric) {
       case 'sales':
       case 'ppcSpend':
@@ -776,10 +776,11 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
     }
   };
 
-  const getTooltipValue = (value: number, metric: MetricType) => {
-    if (metric === 'conversionRate' && value > 100) {
-      return 'Units exceed sessions — not a conversion rate';
+  const getTooltipValue = (cell: { value: number; hasData: boolean; isDefined: boolean; reason: string }, metric: MetricType) => {
+    if (!cell.hasData || !cell.isDefined) {
+      return cell.reason || (cell.hasData ? 'not available' : 'not reported yet');
     }
+    const value = cell.value;
     switch (metric) {
       case 'sales':
       case 'ppcSpend':
@@ -798,6 +799,47 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
         return value.toFixed(2);
     }
   };
+
+  // Cell geometry, named once so the header, the body and the two modes cannot
+  // drift apart now that they are table cells rather than flex children.
+  const cellWidth = viewType === 'weekly' ? 'w-14 md:w-20' : 'w-12 md:w-16';
+  /** Column gap, reproduced as left padding on every column but the first. */
+  const colGap = (i: number) => (i > 0 ? 'pl-0.5 md:pl-1' : '');
+  /** Row gap: 8px above every body row, none above the header. */
+  const rowGap = 'pt-2';
+
+  const periodLabel = (date: Date) =>
+    viewType === 'weekly'
+      ? `Week ${format(date, 'w')} (${format(startOfWeek(date, { weekStartsOn: 1 }), 'dd/MM')} - ${format(endOfWeek(date, { weekStartsOn: 1 }), 'dd/MM')})`
+      : format(date, 'dd/MM/yyyy');
+
+  // The reversal has to survive a screenshot of the grid on its own — clients
+  // crop the caption off. So it is stated on the row itself and marked in every
+  // cell, driven off the shared scale rather than a local list.
+  const inverseMarker = (
+    <span aria-hidden="true" className="absolute left-0.5 top-0.5 text-[8px] leading-none opacity-70">▼</span>
+  );
+  const lowerIsBetterNote = (
+    <div className="text-[9px] font-normal text-gray-600 leading-none pt-0.5">▼ lower is better</div>
+  );
+
+  const dateHeaderCells = dateRange.map((date, i) => (
+    <th key={date.toISOString()} scope="col" className={cn('p-0 align-top', colGap(i))}>
+      <div className={cn('text-[11px] md:text-xs font-normal text-gray-700 text-center py-1.5 md:py-2', cellWidth)}>
+        {viewType === 'weekly' ? (
+          <>
+            <div>W{format(date, 'w')}</div>
+            <div>{format(date, 'dd/MM')}</div>
+          </>
+        ) : (
+          <>
+            <div>{format(date, 'dd')}</div>
+            <div>{format(date, 'MMM')}</div>
+          </>
+        )}
+      </div>
+    </th>
+  ));
 
   const getDisplayName = (account: AccountData) => {
     return getBlurredDisplayName(account.name, isBlurred);
@@ -898,7 +940,7 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
       <CardContent className="px-2 py-2 md:px-6 md:py-4 min-w-0 max-w-full overflow-hidden">
         {/* Scale key + reversal note sit ABOVE the grid: you need them to read a cell,
             so they must not be 250px further down the page. */}
-        <HeatmapLegend>
+        <HeatmapLegend showNotComputableNote>
           {rangeLabel && (
             <div className="text-gray-600">
               Showing {rangeLabel}
@@ -907,121 +949,134 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
           )}
         </HeatmapLegend>
 
-        <div className="space-y-2 w-full max-w-full overflow-x-auto overscroll-x-contain">
+        {/* The grid is 14+ columns of 48–64px plus a label column: it cannot fit a
+            375px phone, and the panel rejected dropping columns or shrinking the
+            text. So it scrolls sideways with the label column pinned, and the
+            scroller is a named, focusable region — a keyboard user has to be able
+            to reach the right-hand columns without a mouse. */}
+        <div
+          role="region"
+          aria-label={isFocusedMode
+            ? `${getDisplayName(accounts[0])} metrics heatmap, scrollable sideways`
+            : 'Metrics heatmap by account, scrollable sideways'}
+          tabIndex={0}
+          className="w-full max-w-full overflow-x-auto overscroll-x-contain rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
           {isFocusedMode ? (
             // Focused mode: Show all metrics vertically
-            <>
-              {/* Date headers */}
-              <div className="flex min-w-max">
-                <div className="w-20 md:w-32 text-[11px] md:text-sm font-medium text-gray-700 py-1.5 md:py-2 sticky left-0 z-10 bg-background flex-shrink-0">Metric</div>
-                <div className="flex gap-0.5 md:gap-1">
-                  {dateRange.map(date => (
-                    <div key={date.toISOString()} className={cn("text-[11px] md:text-xs text-gray-700 text-center py-1.5 md:py-2 flex-shrink-0", viewType === 'weekly' ? "w-14 md:w-20" : "w-12 md:w-16")}>
-                      {viewType === 'weekly' ? (
-                        <>
-                          <div>W{format(date, 'w')}</div>
-                          <div>{format(date, 'dd/MM')}</div>
-                        </>
-                      ) : (
-                        <>
-                          <div>{format(date, 'dd')}</div>
-                          <div>{format(date, 'MMM')}</div>
-                        </>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Metric rows */}
-              {focusedMetricsData.map(({ metric, dailyMetrics }) => (
-                <div key={metric.value} className="flex min-w-max">
-                  <div className="w-20 md:w-32 text-[11px] md:text-sm font-medium text-gray-900 py-2 md:py-3 px-1 md:px-2 bg-gray-50 rounded flex items-center sticky left-0 z-10 flex-shrink-0">
-                    <div className="truncate" title={metric.label}>
-                      {metric.label}
-                    </div>
-                  </div>
-                  <div className="flex gap-0.5 md:gap-1">
-                    {dailyMetrics.map(({ date, value, intensity, dateStr, isInverse }) => (
-                      <div
-                        key={date.toISOString()}
-                        className={cn(
-                          "py-2 md:py-3 px-0.5 md:px-1 rounded text-center cursor-pointer transition-transform hover:scale-105 flex-shrink-0",
-                          viewType === 'weekly' ? "w-14 md:w-20" : "w-12 md:w-16"
-                        )}
-                        style={getCellStyle(intensity, value !== 0)}
-                        title={value === 0 && PENDING_ELIGIBLE_METRICS.includes(metric.value) && (isToday(date) || isYesterday(date))
-                          ? `Awaiting data (reporting lag) — ${metric.label} for ${format(date, 'dd/MM/yyyy')}`
-                          : `${metric.label} - ${viewType === 'weekly' ? `Week ${format(date, 'w')} (${format(startOfWeek(date, { weekStartsOn: 1 }), 'dd/MM')} - ${format(endOfWeek(date, { weekStartsOn: 1 }), 'dd/MM')})` : format(date, 'dd/MM/yyyy')}: ${getTooltipValue(value, metric.value)}`}
-                      >
-                        <div className="text-[11px] md:text-xs font-medium leading-tight">
-                          {formatMetricValue(value, metric.value, date)}
+            <table className="border-separate border-spacing-0">
+              <caption className="sr-only">
+                {getDisplayName(accounts[0])} — {viewType === 'weekly' ? 'weekly' : 'daily'} performance
+                {rangeLabel ? ` for ${rangeLabel}` : ''}. Rows are metrics, columns are
+                {viewType === 'weekly' ? ' weeks' : ' days'}. Hatched cells marked “—” were not reported;
+                “N/A” means the day was reported but the figure cannot be worked out from it.
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col" className="p-0 align-top text-left sticky left-0 z-10 bg-background">
+                    <div className="w-20 md:w-32 text-[11px] md:text-sm font-medium text-gray-700 py-1.5 md:py-2">Metric</div>
+                  </th>
+                  {dateHeaderCells}
+                </tr>
+              </thead>
+              <tbody>
+                {focusedMetricsData.map(({ metric, dailyMetrics }) => {
+                  const inverse = isInverseMetric(metric.value);
+                  return (
+                    <tr key={metric.value}>
+                      <th scope="row" className={cn('p-0 align-middle text-left sticky left-0 z-10', rowGap)}>
+                        <div className="w-20 md:w-32 text-[11px] md:text-sm font-medium text-gray-900 py-2 md:py-3 px-1 md:px-2 bg-gray-50 rounded flex items-center">
+                          <div className="min-w-0">
+                            <div className="truncate" title={inverse ? `${metric.label} (lower is better)` : metric.label}>
+                              {metric.label}
+                            </div>
+                            {inverse ? lowerIsBetterNote : null}
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </>
+                      </th>
+                      {dailyMetrics.map((cell, i) => (
+                        <td key={cell.date.toISOString()} className={cn('p-0 align-middle h-px', rowGap, colGap(i))}>
+                          <div
+                            className={cn(
+                              // h-px on the cell + h-full here reproduces the flex row's
+                              // stretch: the coloured box has to fill the row, or a row
+                              // with a taller label leaves a pale gap above and below it.
+                              'relative h-full flex flex-col justify-center py-2 md:py-3 px-0.5 md:px-1 rounded text-center cursor-pointer transition-transform hover:scale-105',
+                              cellWidth
+                            )}
+                            style={getCellStyle(cell.intensity, cell.hasData)}
+                            title={`${metric.label}${inverse ? ' (lower is better)' : ''} - ${periodLabel(cell.date)}: ${getTooltipValue(cell, metric.value)}`}
+                          >
+                            {inverse && cell.hasData ? inverseMarker : null}
+                            <div className="text-[11px] md:text-xs font-medium leading-tight">
+                              {formatMetricValue(cell, metric.value)}
+                            </div>
+                          </div>
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           ) : (
             // Multi-account mode: Show selected metric by account
-            <>
-              {/* Date headers */}
-              <div className="flex min-w-max">
-                <div className="w-28 md:w-48 text-[11px] md:text-sm font-medium text-gray-700 py-1.5 md:py-2 sticky left-0 z-10 bg-background flex-shrink-0">Account</div>
-                <div className="flex gap-0.5 md:gap-1">
-                  {dateRange.map(date => (
-                    <div key={date.toISOString()} className={cn("text-[11px] md:text-xs text-gray-700 text-center py-1.5 md:py-2 flex-shrink-0", viewType === 'weekly' ? "w-14 md:w-20" : "w-12 md:w-16")}>
-                      {viewType === 'weekly' ? (
-                        <>
-                          <div>W{format(date, 'w')}</div>
-                          <div>{format(date, 'dd/MM')}</div>
-                        </>
-                      ) : (
-                        <>
-                          <div>{format(date, 'dd')}</div>
-                          <div>{format(date, 'MMM')}</div>
-                        </>
-                      )}
+            <table className="border-separate border-spacing-0">
+              <caption className="sr-only">
+                {METRIC_OPTIONS.find(o => o.value === selectedMetric)?.label ?? selectedMetric} by account,
+                {viewType === 'weekly' ? ' weekly' : ' daily'}{rangeLabel ? `, ${rangeLabel}` : ''}. Rows are accounts,
+                columns are {viewType === 'weekly' ? 'weeks' : 'days'}. Hatched cells marked “—” were not reported;
+                “N/A” means the period was reported but the figure cannot be worked out from it.
+                {isInverseMetric(selectedMetric) ? ' For this metric a lower value is better.' : ''}
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col" className="p-0 align-top text-left sticky left-0 z-10 bg-background">
+                    <div className="w-28 md:w-48 text-[11px] md:text-sm font-medium text-gray-700 py-1.5 md:py-2">
+                      Account
+                      {isInverseMetric(selectedMetric) ? lowerIsBetterNote : null}
                     </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Account rows */}
-              {accountMetricsData.map(({ account, dailyMetrics }) => (
-                <div key={account.id} className="flex min-w-max">
-                  <div 
-                    className="w-28 md:w-48 text-[11px] md:text-sm font-medium text-gray-900 py-2 md:py-3 px-1 md:px-2 bg-gray-50 rounded flex items-center cursor-pointer hover:bg-gray-100 transition-colors sticky left-0 z-10 flex-shrink-0"
-                    onClick={() => handleAccountClick(account.id)}
-                  >
-                    <div className="truncate" title={isBlurred ? account.name : getDisplayName(account)}>
-                      {getDisplayName(account)}
-                    </div>
-                    {!isSharedView && (
-                      <AccountTagBadges merchantToken={account.merchantToken} size="sm" tags={accountTagsMap[account.merchantToken] || []} />
-                    )}
-                  </div>
-                  <div className="flex gap-0.5 md:gap-1">
-                    {dailyMetrics.map(({ date, value, intensity, isInverse }) => (
+                  </th>
+                  {dateHeaderCells}
+                </tr>
+              </thead>
+              <tbody>
+                {accountMetricsData.map(({ account, dailyMetrics }) => (
+                  <tr key={account.id}>
+                    <th scope="row" className={cn('p-0 align-middle text-left sticky left-0 z-10', rowGap)}>
                       <div
-                        key={date.toISOString()}
-                        className={cn(
-                          "py-2 md:py-3 px-0.5 md:px-1 rounded text-center cursor-pointer transition-transform hover:scale-105 flex-shrink-0",
-                          viewType === 'weekly' ? "w-14 md:w-20" : "w-12 md:w-16"
-                        )}
-                        style={getCellStyle(intensity, value !== 0)}
-                        title={`${getDisplayName(account)} - ${viewType === 'weekly' ? `Week ${format(date, 'w')} (${format(startOfWeek(date, { weekStartsOn: 1 }), 'dd/MM')} - ${format(endOfWeek(date, { weekStartsOn: 1 }), 'dd/MM')})` : format(date, 'dd/MM/yyyy')}: ${getTooltipValue(value, selectedMetric)}`}
+                        className="w-28 md:w-48 text-[11px] md:text-sm font-medium text-gray-900 py-2 md:py-3 px-1 md:px-2 bg-gray-50 rounded flex items-center cursor-pointer hover:bg-gray-100 transition-colors"
+                        onClick={() => handleAccountClick(account.id)}
                       >
-                        <div className="text-[11px] md:text-xs font-medium leading-tight">
-                          {formatMetricValue(value, selectedMetric, date)}
+                        <div className="truncate" title={isBlurred ? account.name : getDisplayName(account)}>
+                          {getDisplayName(account)}
                         </div>
+                        {!isSharedView && (
+                          <AccountTagBadges merchantToken={account.merchantToken} size="sm" tags={accountTagsMap[account.merchantToken] || []} />
+                        )}
                       </div>
+                    </th>
+                    {dailyMetrics.map((cell, i) => (
+                      <td key={cell.date.toISOString()} className={cn('p-0 align-middle h-px', rowGap, colGap(i))}>
+                        <div
+                          className={cn(
+                            'relative h-full flex flex-col justify-center py-2 md:py-3 px-0.5 md:px-1 rounded text-center cursor-pointer transition-transform hover:scale-105',
+                            cellWidth
+                          )}
+                          style={getCellStyle(cell.intensity, cell.hasData)}
+                          title={`${getDisplayName(account)} - ${periodLabel(cell.date)}: ${getTooltipValue(cell, selectedMetric)}`}
+                        >
+                          {cell.isInverse && cell.hasData ? inverseMarker : null}
+                          <div className="text-[11px] md:text-xs font-medium leading-tight">
+                            {formatMetricValue(cell, selectedMetric)}
+                          </div>
+                        </div>
+                      </td>
                     ))}
-                  </div>
-                </div>
-              ))}
-            </>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
         </div>
 
