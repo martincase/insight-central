@@ -451,8 +451,8 @@ export function CountryScopedPerformance({
               >
                 <table className="min-w-full text-xs border-separate border-spacing-0">
                   <caption className="sr-only">
-                    Daily performance for {scopeLabel(scope)}, {format(currentRange.from, 'd MMM')} to{' '}
-                    {format(currentRange.to, 'd MMM yyyy')}. Rows are metrics, columns are days.
+                    Daily performance for {scopeLabel(scope)}, {format(effectiveRange.from, 'd MMM')} to{' '}
+                    {format(effectiveRange.to, 'd MMM yyyy')}. Rows are metrics, columns are days.
                     Hatched cells marked “—” were not reported.
                   </caption>
                   <thead>
