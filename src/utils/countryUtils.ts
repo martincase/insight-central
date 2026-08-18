@@ -27,6 +27,11 @@ const COUNTRY_NAMES: Record<string, string> = {
   BR: 'Brazil',
   MX: 'Mexico',
   NL: 'Netherlands',
+  // Without these two the scope selector printed the raw codes — "BE · Vendor",
+  // "IE · Vendor" — next to fully-named siblings, and getCountryName fed the
+  // flag chip and aria-label too, so all three read as a code.
+  BE: 'Belgium',
+  IE: 'Ireland',
   SE: 'Sweden',
   PL: 'Poland',
   TR: 'Turkey',
@@ -34,6 +39,7 @@ const COUNTRY_NAMES: Record<string, string> = {
   SG: 'Singapore',
   EG: 'Egypt',
   SA: 'Saudi Arabia',
+  ZA: 'South Africa',
 };
 
 /**

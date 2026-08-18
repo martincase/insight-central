@@ -18,6 +18,13 @@ const COUNTRY_CURRENCY_MAP: Record<string, CurrencyInfo> = {
   IT: { code: 'EUR', symbol: '€', locale: 'it-IT', name: 'Euro' },
   ES: { code: 'EUR', symbol: '€', locale: 'es-ES', name: 'Euro' },
   NL: { code: 'EUR', symbol: '€', locale: 'nl-NL', name: 'Euro' },
+  // BE and IE were absent until 2026-08-18. Both are euro marketplaces, so both
+  // fell through to DEFAULT_CURRENCY and printed Portwest's Belgian and Irish
+  // sales as £4,922.45 / £6,599.09 — pounds, on a client-facing table, for
+  // marketplaces that trade in euros. Same class of bug as the 'DE#Vendor' one
+  // noted on getCurrencyInfo below.
+  BE: { code: 'EUR', symbol: '€', locale: 'nl-BE', name: 'Euro' },
+  IE: { code: 'EUR', symbol: '€', locale: 'en-IE', name: 'Euro' },
   AU: { code: 'AUD', symbol: 'A$', locale: 'en-AU', name: 'Australian Dollar' },
   CA: { code: 'CAD', symbol: 'C$', locale: 'en-CA', name: 'Canadian Dollar' },
   JP: { code: 'JPY', symbol: '¥', locale: 'ja-JP', name: 'Japanese Yen' },
@@ -31,6 +38,7 @@ const COUNTRY_CURRENCY_MAP: Record<string, CurrencyInfo> = {
   SG: { code: 'SGD', symbol: 'S$', locale: 'en-SG', name: 'Singapore Dollar' },
   EG: { code: 'EGP', symbol: 'E£', locale: 'ar-EG', name: 'Egyptian Pound' },
   SA: { code: 'SAR', symbol: '﷼', locale: 'ar-SA', name: 'Saudi Riyal' },
+  ZA: { code: 'ZAR', symbol: 'R', locale: 'en-ZA', name: 'South African Rand' },
 };
 
 // Default currency (fallback)
@@ -65,7 +73,20 @@ export function getCountryFromMerchantToken(merchantToken: string): string | nul
 export function getCurrencyInfo(countryCode: string | null): CurrencyInfo {
   if (!countryCode) return DEFAULT_CURRENCY;
   const area = countryCode.split('#')[0];
-  return COUNTRY_CURRENCY_MAP[area.toUpperCase()] || DEFAULT_CURRENCY;
+  const hit = COUNTRY_CURRENCY_MAP[area.toUpperCase()];
+  if (hit) return hit;
+
+  // Falling through to GBP is the dangerous path: an unmapped marketplace does
+  // not look broken, it looks like pounds. That is how BE and IE shipped euro
+  // revenue to a client under a £ sign. The fallback stays (blanking a figure
+  // mid-render would be worse) but it must never again do so silently.
+  if (import.meta.env.DEV) {
+    console.warn(
+      `[currencyUtils] No currency mapped for "${area}" — falling back to GBP. ` +
+        `Add it to COUNTRY_CURRENCY_MAP before this reaches a client dashboard.`,
+    );
+  }
+  return DEFAULT_CURRENCY;
 }
 
 /**
