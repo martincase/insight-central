@@ -1189,6 +1189,14 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
                     }
                   : null
               }
+              dataNote={
+                scopedMetrics.completeness.pendingDays > 0
+                  ? {
+                      title: 'Most recent days still landing',
+                      detail: scopedMetrics.completeness.pendingHeadline,
+                    }
+                  : null
+              }
             />
 
             {brandCountries.spid && (

@@ -19,6 +19,14 @@ export interface ComparisonLabel {
   unequalLength: boolean;
   /** e.g. "31d vs 30d" — only set when `unequalLength`. */
   lengthNote?: string;
+  /**
+   * e.g. "12 complete days vs 12" — set only when the selected window was cut
+   * back to the days that have landed. It says two things at once and has to
+   * say both: the comparison IS like-for-like, and it is not the fourteen days
+   * the picker says. Without it a client reads "vs previous 14 days" over a
+   * figure covering twelve.
+   */
+  completenessNote?: string;
   currentDays: number;
   previousDays: number;
 }
@@ -51,17 +59,23 @@ const ROLLING_FILTERS: DateFilter[] = ['last-7-days', 'last-14-days', 'past-30-d
 export const buildComparisonLabel = (
   current: Range,
   previous: Range,
-  opts: { rolling?: boolean } = {}
+  opts: { rolling?: boolean; truncatedDays?: number } = {}
 ): ComparisonLabel => {
   const currentDays = dayCount(current);
   const previousDays = dayCount(previous);
   const unequalLength = currentDays !== previousDays;
   const lengthNote = unequalLength ? `${currentDays}d vs ${previousDays}d` : undefined;
+  const truncatedDays = opts.truncatedDays ?? 0;
+  const completenessNote =
+    truncatedDays > 0 ? `${currentDays} complete days vs ${previousDays}` : undefined;
 
   let short: string;
   if (isWholeCalendarMonth(previous)) {
     short = `vs ${format(previous.from, 'MMM yyyy')}`;
   } else if (opts.rolling && !unequalLength) {
+    // Say the number of days actually compared, not the number the picker
+    // offered. "vs previous 14 days" over twelve days of data is the caption
+    // that made Portwest's shortfall look like trading.
     short = `vs previous ${previousDays} days`;
   } else if (previousDays === 1) {
     short = `vs ${format(previous.from, 'd MMM')}`;
@@ -77,8 +91,15 @@ export const buildComparisonLabel = (
       ` The two periods are not the same length — ${currentDays} days against ${previousDays} — ` +
       `so part of any change is calendar length rather than trading.`;
   }
+  if (truncatedDays > 0) {
+    detail +=
+      ` The last ${truncatedDays} ${truncatedDays === 1 ? 'day' : 'days'} of the selected period ` +
+      `${truncatedDays === 1 ? 'has' : 'have'} not fully arrived yet, so both periods have been cut ` +
+      `to the same ${currentDays} complete days. The figures are not scaled up to the full period — ` +
+      `they are what actually happened in the days shown.`;
+  }
 
-  return { short, detail, unequalLength, lengthNote, currentDays, previousDays };
+  return { short, detail, unequalLength, lengthNote, completenessNote, currentDays, previousDays };
 };
 
 /**

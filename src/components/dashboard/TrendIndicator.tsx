@@ -74,7 +74,12 @@ export const TrendIndicator = ({
 
   const baselineCaption = (extra?: string) => {
     if (!comparison || !showBaselineOnFace) return null;
-    const text = [comparison.short, extra ?? comparison.lengthNote].filter(Boolean).join(' · ');
+    // completenessNote rides alongside rather than replacing the baseline: a
+    // client needs to read both what this is compared against and how much of
+    // the period it actually covers.
+    const text = [comparison.short, extra ?? comparison.lengthNote, comparison.completenessNote]
+      .filter(Boolean)
+      .join(' · ');
     return (
       <span className="text-[10px] leading-tight text-gray-500 font-normal whitespace-normal">
         {text}

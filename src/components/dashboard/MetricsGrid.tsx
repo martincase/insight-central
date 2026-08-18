@@ -10,8 +10,8 @@ import { isVendorAccount as isVendorAccountCheck } from '@/utils/vendorUtils';
 import { isMetricPlottable } from '@/hooks/useChartMetrics';
 import type { UseScopedMetricsResult } from '@/hooks/useScopedMetrics';
 import { describeMissingDates } from '@/utils/kpiIntegrity';
-import { AlertTriangle } from 'lucide-react';
-import { getComparisonLabel } from '@/utils/comparisonLabels';
+import { AlertTriangle, Info } from 'lucide-react';
+import { buildComparisonLabel, getComparisonLabel } from '@/utils/comparisonLabels';
 import { VENDOR_LAG_DAYS } from '@/utils/asinProcessor';
 
 export interface OrganicMetrics {
@@ -96,9 +96,20 @@ export const MetricsGrid = ({
   // date ranges rather than a hand-maintained lookup — the old map was keyed on
   // filter names that no longer exist ('last-30-days', 'last-60-days'), so most
   // periods silently fell back to the meaningless "vs prior period".
+  //
+  // Where a scoped series is present it OWNS the ranges, because it is the only
+  // thing that knows how far the feed has actually landed. Deriving the label
+  // from the picker instead is what captioned Portwest's twelve days of trading
+  // "vs previous 14 days" and turned the shortfall into a 13.7% decline.
   const comparisonLabel = useMemo(
-    () => getComparisonLabel(dateFilter, customDateRange, { vendorLagDays: isVendor ? VENDOR_LAG_DAYS : 0 }),
-    [dateFilter, customDateRange, isVendor]
+    () =>
+      scopedMetrics
+        ? buildComparisonLabel(scopedMetrics.effectiveRange, scopedMetrics.effectivePreviousRange, {
+            rolling: dateFilter === 'last-7-days' || dateFilter === 'last-14-days' || dateFilter === 'past-30-days',
+            truncatedDays: scopedMetrics.truncation.trimmedDays,
+          })
+        : getComparisonLabel(dateFilter, customDateRange, { vendorLagDays: isVendor ? VENDOR_LAG_DAYS : 0 }),
+    [scopedMetrics, dateFilter, customDateRange, isVendor]
   );
 
   // Only use API PPC data if it was actually provided AND has meaningful data (not just empty defaults)
@@ -279,7 +290,23 @@ export const MetricsGrid = ({
   // by; "0.0%" would read as "advertising is free", not "unknown". Also withheld
   // when the sales side is materially incomplete — dividing a whole month of ad
   // spend into two days of revenue is what produced Lockabox's 109.3%.
-  const blendedRatiosOk = adsAvailable && !salesIncomplete;
+  //
+  // And withheld, for exactly the same reason, whenever the SALES window has
+  // been cut back to the days that have landed while the ADVERTISING window has
+  // not. The ads feed has no such lag, so on Portwest this ratio would put
+  // fourteen days of spend over twelve days of revenue and overstate TACOS by
+  // about a sixth. Truncating the ads side to match is the proper fix, but the
+  // previous period's advertising arrives here already summed, with no daily
+  // series to cut — so there is no honest denominator to build, and a ratio with
+  // no honest denominator is not printed.
+  const windowsMismatched = !!scopedMetrics && scopedMetrics.truncation.trimmedDays > 0;
+  const blendedRatiosOk = adsAvailable && !salesIncomplete && !windowsMismatched;
+  /** Why TACOS and Advertising % are blank, said on the card rather than left as '—'. */
+  const blendedWithheldNote = salesIncomplete
+    ? incompleteNote
+    : windowsMismatched
+      ? `Withheld — sales cover ${scopedMetrics!.truncation.completeDays} complete days, advertising covers the full period`
+      : undefined;
   const tacos = blendedRatiosOk ? ratio(ppcSpend, totalMetrics.sales, 100) : null;
   const prevTacos = blendedRatiosOk ? ratio(prevPpcSpend, totalPreviousMetrics.sales, 100) : null;
 
@@ -407,6 +434,35 @@ export const MetricsGrid = ({
     </div>
   ) : null;
 
+  // Routine feed lag, said plainly and styled as routine. This is the bar that
+  // was simply absent: the grace window took the trailing days out of the
+  // assessment and nothing put them back, so the page said nothing at all about
+  // the two days it had already stopped counting.
+  const pendingBanner =
+    completeness && completeness.pendingHeadline ? (
+      <div
+        role="status"
+        className="flex items-start gap-2 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-700"
+      >
+        <Info className="h-4 w-4 mt-0.5 flex-shrink-0" />
+        <div>
+          <div className="font-medium">
+            {scopedMetrics && scopedMetrics.truncation.trimmedDays > 0
+              ? `Showing ${scopedMetrics.truncation.completeDays} complete days`
+              : 'Most recent days still landing'}
+          </div>
+          <div className="text-xs mt-0.5">{completeness.pendingHeadline}</div>
+          {scopedMetrics && scopedMetrics.truncation.trimmedDays > 0 && (
+            <div className="text-xs mt-1">
+              Both periods have been cut to the same number of complete days, so the comparison is
+              like-for-like. Nothing has been scaled up to fill the missing days — these are the
+              figures for the days shown.
+            </div>
+          )}
+        </div>
+      </div>
+    ) : null;
+
   // Say plainly what is missing, in the same place the numbers are read.
   const completenessBanner =
     completeness && completeness.headline ? (
@@ -456,6 +512,7 @@ export const MetricsGrid = ({
       return (
         <div className="space-y-4">
           {scopeErrorBanner}
+          {pendingBanner}
           {completenessBanner}
           {/* Vendor Financial Metrics */}
           <div>
@@ -565,6 +622,7 @@ export const MetricsGrid = ({
     return (
       <div className="space-y-4">
         {scopeErrorBanner}
+        {pendingBanner}
         {completenessBanner}
         {/* Primary Financial Metrics */}
         <div>
@@ -682,7 +740,7 @@ export const MetricsGrid = ({
               isPercentage={true}
               onClick={chartToggleFor('tacos')}
               isSelected={chartSelected('tacos')}
-              comparisonSuppressedReason={incompleteNote}
+              comparisonSuppressedReason={blendedWithheldNote}
             />
 
             <MetricsCard
@@ -697,7 +755,7 @@ export const MetricsGrid = ({
               isPercentage={true}
               onClick={chartToggleFor('advertisingReliance')}
               isSelected={chartSelected('advertisingReliance')}
-              comparisonSuppressedReason={incompleteNote}
+              comparisonSuppressedReason={blendedWithheldNote}
             />
 
 
