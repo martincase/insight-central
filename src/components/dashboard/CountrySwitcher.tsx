@@ -40,6 +40,8 @@ interface Option {
   search: string;
   /** Rendered slightly apart — these are totals, not marketplaces. */
   isTotal?: boolean;
+  /** One line of small print under the row. Only totals carry one. */
+  hint?: string;
 }
 
 /** Names a British or American user is at least as likely to type as the real one. */
@@ -107,6 +109,17 @@ export function CountrySwitcher({
     const hasEu = countries.some((c) => c.region === 'EU');
     const hasNonEu = countries.some((c) => c.region !== 'EU');
 
+    // "All EU" is whatever the registry files under region 'EU' — the RPCs read
+    // the same column — and post-Brexit that is a genuine coin toss a reviewer
+    // got wrong. So the option says which way it falls for THIS client, read off
+    // the client's own rows rather than asserted.
+    const ukRow = countries.find((c) => ['GB', 'UK'].includes((c.country_code || '').toUpperCase()));
+    const euHint = !ukRow
+      ? 'Every EU-region marketplace on this account'
+      : ukRow.region === 'EU'
+        ? 'Includes the United Kingdom'
+        : 'Excludes the United Kingdom';
+
     // Totals first in the menu — a client who wants the whole business should
     // not scroll past twelve markets to find it.
     const overview: Option[] = [];
@@ -122,7 +135,7 @@ export function CountrySwitcher({
         };
       });
       const allEu: Option | null = hasEu
-        ? { value: 'ALL_EU', label: 'All EU', shortLabel: 'All EU', search: 'All EU ALL_EU Europe', isTotal: true }
+        ? { value: 'ALL_EU', label: 'All EU', shortLabel: 'All EU', search: 'All EU ALL_EU Europe', isTotal: true, hint: euHint }
         : null;
       const all: Option = {
         value: 'ALL',
@@ -191,7 +204,7 @@ export function CountrySwitcher({
       // to exclude; otherwise it is the whole business under a second name.
       const allEu: Option | null =
         hasEu && hasNonEu
-          ? { value: 'ALL_EU', label: 'All EU', shortLabel: 'All EU', search: 'All EU ALL_EU Europe', isTotal: true }
+          ? { value: 'ALL_EU', label: 'All EU', shortLabel: 'All EU', search: 'All EU ALL_EU Europe', isTotal: true, hint: euHint }
           : null;
       const wholeLabel = clientName ? `${clientName} — whole business` : 'Whole business';
       const all: Option = {
@@ -278,6 +291,7 @@ export function CountrySwitcher({
                 aria-selected={active}
                 tabIndex={active || (activeIndex < 0 && i === 0) ? 0 : -1}
                 onClick={() => onChange(opt.value)}
+                title={opt.hint}
                 className={cn(
                   'flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs md:text-sm font-medium transition-all whitespace-nowrap',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-1',
@@ -358,14 +372,24 @@ export function CountrySwitcher({
                           className="gap-2"
                         >
                           <CountryFlag code={opt.value} />
-                          <span
-                            className={cn(
-                              'min-w-0 flex-1 truncate',
-                              opt.isTotal ? 'font-medium text-gray-900' : 'text-gray-700',
-                              active && 'text-blue-800',
+                          <span className="min-w-0 flex-1">
+                            <span
+                              className={cn(
+                                'block truncate',
+                                opt.isTotal ? 'font-medium text-gray-900' : 'text-gray-700',
+                                active && 'text-blue-800',
+                              )}
+                            >
+                              {opt.shortLabel}
+                            </span>
+                            {/* Small print on the row itself — a rollup whose
+                                membership is not obvious from its name has to
+                                state it where the choice is made. */}
+                            {opt.hint && (
+                              <span className="block truncate text-[11px] font-normal text-gray-500">
+                                {opt.hint}
+                              </span>
                             )}
-                          >
-                            {opt.shortLabel}
                           </span>
                           {active && (
                             <Check className="h-4 w-4 shrink-0 text-blue-700" aria-hidden="true" />

@@ -46,7 +46,11 @@ const UnavailableCard: React.FC<{ title: string; body: React.ReactNode; warn?: b
 export const StockInventoryTable: React.FC<StockInventoryTableProps> = ({ merchantToken, accountType }) => {
   const [search, setSearch] = useState('');
   const [sortField, setSortField] = useState<SortField>('totalStock');
-  const [sortDir, setSortDir] = useState<SortDir>('asc');
+  // Descending, not ascending. Ascending opened a vendor catalogue on its zeros
+  // — Portwest's first page was 25 rows of nothing, which reads as "we are out
+  // of stock everywhere" rather than "these are the ones to look at". The
+  // out-of-stock and no-stock-data chips above are the way into the zeros.
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [showAll, setShowAll] = useState(false);
   const [stockFilter, setStockFilter] = useState<StockFilter>('none');
   const { openASINDetail } = useASINDetail();
@@ -181,7 +185,18 @@ export const StockInventoryTable: React.FC<StockInventoryTableProps> = ({ mercha
   const unknownCount = rows.length - knownRows.length;
   const snapshotLabel = fmtDate(snapshotDate);
 
-  const sellerColumns: [SortField, string, string][] = [
+  /**
+   * [field, label, classes, basis?]
+   *
+   * `basis` is a subheader naming what the column is measured on. Two of the
+   * vendor columns sit next to each other and are measured on different things
+   * — "Sellable 0" is a stock LEVEL as at the snapshot date, "OOS Rate 0.0%" is
+   * a RATE Amazon reports over time — so unlabelled they read as contradicting
+   * each other when in fact both are right.
+   */
+  type Column = [SortField, string, string, string?];
+
+  const sellerColumns: Column[] = [
     ['productName', 'Product Name', ''],
     ['sku', 'SKU', 'w-28'],
     ['asin', 'ASIN', 'w-28'],
@@ -191,14 +206,14 @@ export const StockInventoryTable: React.FC<StockInventoryTableProps> = ({ mercha
     ['price', 'Price', 'text-right w-24'],
   ];
 
-  const vendorColumns: [SortField, string, string][] = [
+  const vendorColumns: Column[] = [
     ['productName', 'Product', ''],
     ['asin', 'ASIN', 'w-28'],
-    ['totalStock', 'Sellable Units', 'text-right w-28'],
+    ['totalStock', 'Sellable Units', 'text-right w-28', snapshotLabel ? `on hand, ${snapshotLabel}` : 'on hand'],
     ['openPoUnits', 'Open PO Units', 'text-right w-28'],
     ['unfilledUnits', 'Unfilled Orders', 'text-right w-28'],
-    ['oosRate', 'OOS Rate %', 'text-right w-24'],
-    ['sellThroughRate', 'Sell-Through %', 'text-right w-28'],
+    ['oosRate', 'OOS Rate %', 'text-right w-24', "Amazon's rate over time"],
+    ['sellThroughRate', 'Sell-Through %', 'text-right w-28', "Amazon's rate over time"],
   ];
 
   const columns = isVendor ? vendorColumns : sellerColumns;
@@ -286,6 +301,15 @@ export const StockInventoryTable: React.FC<StockInventoryTableProps> = ({ mercha
             ? <>Latest inventory snapshot: <strong>{snapshotLabel}</strong>. Stock is {isVendor ? 'sellable units on hand at Amazon' : 'FBA fulfillable + merchant-fulfilled units'} per {unitLabel.toLowerCase()}.</>
             : <>Snapshot date unknown.</>}
         </p>
+        {isVendor && (
+          // Sellable Units and OOS Rate are both correct and are not on the same
+          // time base, which is why "Sellable 0" can sit beside "OOS Rate 0.0%".
+          <p className="text-xs text-muted-foreground mt-1">
+            Sellable Units is the stock level at that snapshot. OOS Rate % and Sell-Through % are rates Amazon
+            measures over time and delivers with the feed — they are not readings of today's shelf, so they will
+            not always agree with the units beside them.
+          </p>
+        )}
         {isStale && (
           <div className="mt-2 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
             <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
@@ -308,16 +332,21 @@ export const StockInventoryTable: React.FC<StockInventoryTableProps> = ({ mercha
           <Table className="text-sm">
             <TableHeader>
               <TableRow>
-                {columns.map(([field, label, cls]) => (
+                {columns.map(([field, label, cls, basis]) => (
                   <TableHead
                     key={field}
-                    className={`cursor-pointer select-none hover:bg-muted/50 ${cls}`}
+                    className={`cursor-pointer select-none hover:bg-muted/50 align-bottom ${cls}`}
                     onClick={() => handleSort(field)}
                   >
                     <div className={`flex items-center gap-1 ${cls.includes('text-right') ? 'justify-end' : ''}`}>
                       {label}
                       <SortIcon field={field} />
                     </div>
+                    {basis && (
+                      <div className={`text-[10px] font-normal normal-case text-muted-foreground ${cls.includes('text-right') ? 'text-right' : ''}`}>
+                        {basis}
+                      </div>
+                    )}
                   </TableHead>
                 ))}
               </TableRow>

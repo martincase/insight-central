@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { format } from 'date-fns';
+import {
+  CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer,
+  Tooltip as ChartTooltip, XAxis, YAxis,
+} from 'recharts';
 import { supabase } from '@/integrations/supabase/client';
 import { useScopedMetrics } from '@/hooks/useScopedMetrics';
+import { useChartMetrics } from '@/hooks/useChartMetrics';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -262,6 +267,68 @@ export function CountryScopedPerformance({
 
   const anyInverseRow = heatmapRows.some(r => isInverseHeatmapMetric(r.metric));
 
+  /* ------------------------------------------------------------------ *
+   * Performance trends — the country-scoped twin of MonthlyPerformanceView.
+   *
+   * The trend chart on the home-scope branch reads account.merchantToken, so it
+   * plots the linked Amazon account whatever the switcher says. That is why it
+   * is gated behind isHomeScope, and it stays gated. This chart is built from
+   * `series` and `days` — the very arrays the heatmap above and the KPI
+   * sparklines below are drawn from, all of them out of one
+   * useScopedMetrics(spid, scope, …) call — so it cannot plot a country other
+   * than the selected one.
+   *
+   * Ads are not split by marketplace, so there is no impressions / spend / ACOS
+   * series to offer here. The five plottable series are exactly the five KPI
+   * cards, and the cards toggle them.
+   * ------------------------------------------------------------------ */
+  const { selectedChartMetrics, toggleChartMetric } = useChartMetrics(['sales', 'units']);
+
+  const chartMetrics: {
+    key: string;
+    label: string;
+    color: string;
+    axis: 'left' | 'right';
+    spark: number[];
+    has: boolean[];
+    fmt: (v: number) => string;
+  }[] = [
+    // Colours are MonthlyPerformanceView's, so a client switching between the
+    // home scope and a country keeps reading the same hue as the same series.
+    { key: 'sales', label: 'Sales', color: '#3B82F6', axis: 'left', spark: salesSpark, has: dayHasData, fmt: fmtMoney },
+    { key: 'units', label: 'Units', color: '#8B5CF6', axis: 'left', spark: unitsSpark, has: dayHasData, fmt: fmtNum },
+    {
+      key: 'pageViews',
+      label: !totals?.hasSessions ? 'Glance views' : 'Page views',
+      color: '#EC4899', axis: 'left', spark: pageViewsSpark, has: dayHasData, fmt: fmtNum,
+    },
+    { key: 'buyBox', label: 'Buy Box %', color: '#EAB308', axis: 'right', spark: buyBoxSpark, has: dayHasData, fmt: fmtPct },
+    ...(conversionAvailable
+      ? [{
+          key: 'conversion',
+          label: totals?.mixedArms ? 'Conversion % (seller arm)' : 'Conversion %',
+          color: '#EF4444', axis: 'right' as const, spark: conversionSpark, has: conversionHasValue, fmt: fmtPct,
+        }]
+      : []),
+  ];
+
+  /** Cards are controls only when there is something to plot. */
+  const chartInteractive = !scopedEmpty && days.length > 0;
+  const chartToggleFor = (key: string) => (chartInteractive ? () => toggleChartMetric(key) : undefined);
+  const chartSelected = (key: string) => chartInteractive && selectedChartMetrics.includes(key);
+
+  const plottedMetrics = chartMetrics.filter(m => selectedChartMetrics.includes(m.key));
+  const usesRightAxis = plottedMetrics.some(m => m.axis === 'right');
+  const usesLeftAxis = plottedMetrics.some(m => m.axis === 'left');
+
+  // A day the feed never reported is null, not zero — recharts leaves a gap
+  // rather than drawing a fall to the floor the client never had.
+  const chartData = days.map((d, i) => {
+    const row: Record<string, string | number | null> = { label: format(d, 'd MMM') };
+    chartMetrics.forEach(m => { row[m.key] = m.has[i] ? (m.spark[i] ?? 0) : null; });
+    return row;
+  });
+
   const sortedAsins = useMemo(() => {
     const rows = asinRows || [];
     return [...rows].sort((a, b) => {
@@ -310,6 +377,16 @@ export function CountryScopedPerformance({
             <div className="text-xs mt-0.5">{completeness.headline}</div>
             {describeMissingDates(completeness) && (
               <div className="text-xs mt-0.5">{describeMissingDates(completeness)}</div>
+            )}
+            {/* A marketplace can be listed on the account and still be trading
+                nothing — Portwest's United States · Seller is selectable and
+                returns no rows. Saying so beats an empty page the client reads
+                as a broken dashboard. */}
+            {completeness.level === 'empty' && (
+              <div className="text-xs mt-0.5">
+                This marketplace is listed on the account but reported no sales in this window. Try a wider date
+                range, or pick another scope above.
+              </div>
             )}
           </div>
         </div>
@@ -399,6 +476,11 @@ export function CountryScopedPerformance({
           <p className="text-xs md:text-sm text-muted-foreground hidden sm:block">
             Sales, units, page views, buy box and conversion for {scopeLabel(scope)}. Advertising is not part of these figures — PPC, ACOS and TACOS are reported, split by country, in the Advertising panel.
           </p>
+          {chartInteractive && (
+            <p className="text-xs md:text-sm text-muted-foreground hidden sm:block">
+              Select a card to add or remove it from the trend chart below.
+            </p>
+          )}
         </div>
         {loading ? (
           <Skeleton className="h-28 w-full" />
@@ -415,6 +497,8 @@ export function CountryScopedPerformance({
               seriesSemantics="sum"
               comparisonSuppressedReason={incompleteNote}
               qualifier={partialQualifier}
+              onClick={chartToggleFor('sales')}
+              isSelected={chartSelected('sales')}
             />
             <MetricsCard
               title="Units Ordered"
@@ -427,6 +511,8 @@ export function CountryScopedPerformance({
               seriesSemantics="sum"
               comparisonSuppressedReason={incompleteNote}
               qualifier={partialQualifier}
+              onClick={chartToggleFor('units')}
+              isSelected={chartSelected('units')}
             />
             <MetricsCard
               title="Page Views"
@@ -441,16 +527,26 @@ export function CountryScopedPerformance({
               info="Seller page views are Amazon's BROWSER page views — the mobile app is not in them. Vendor marketplaces report glance views instead. Neither is a session count, so the sessions used for conversion can be the larger number."
               comparisonSuppressedReason={incompleteNote}
               qualifier={partialQualifier}
+              onClick={chartToggleFor('pageViews')}
+              isSelected={chartSelected('pageViews')}
             />
             <MetricsCard
               title="Buy Box %"
+              // Weighted by page views inside useScopedMetrics, not a mean of
+              // the daily cells above — so it will not reproduce from them by
+              // averaging. Said on the card rather than left to be discovered.
+              info="Weighted by page views across the days in this period, not a plain average of the daily cells above — a day with few page views moves it less than a busy one. Days the feed did not report are left out entirely. Where the scope reports no page views at all, an unweighted mean is used instead."
               value={scopedEmpty ? '—' : fmtPct(avgBuyBox)}
               color="text-violet-600"
               currentValue={avgBuyBox}
               previousValue={prevAvgBuyBox}
+              previousDisplayValue={scopedEmpty ? undefined : fmtPct(prevAvgBuyBox)}
+              isPercentage
               comparisonLabel={comparison}
               sparklineData={buyBoxSpark}
               comparisonSuppressedReason={incompleteNote}
+              onClick={chartToggleFor('buyBox')}
+              isSelected={chartSelected('buyBox')}
             />
             <MetricsCard
               // Named for what it measures. Vendor marketplaces report no
@@ -476,13 +572,90 @@ export function CountryScopedPerformance({
               color={conversionAvailable ? 'text-fuchsia-600' : 'text-muted-foreground'}
               currentValue={conversionAvailable ? avgConversion : 0}
               previousValue={conversionAvailable ? prevAvgConversion : 0}
+              previousDisplayValue={conversionAvailable && !scopedEmpty ? fmtPct(prevAvgConversion) : undefined}
+              isPercentage
               comparisonLabel={comparison}
               sparklineData={conversionAvailable ? conversionSpark : undefined}
               comparisonSuppressedReason={incompleteNote}
+              onClick={conversionAvailable ? chartToggleFor('conversion') : undefined}
+              isSelected={conversionAvailable && chartSelected('conversion')}
             />
           </div>
         )}
       </section>
+
+      {/* Performance Trends — driven by the KPI cards above, plotted from this
+          scope's own daily series. */}
+      {chartInteractive && (
+        <section>
+          <div className="mb-3 md:mb-4">
+            <h2 className="text-base md:text-xl font-semibold text-foreground">Performance Trends</h2>
+            <p className="text-xs md:text-sm text-muted-foreground hidden sm:block">
+              Daily {plottedMetrics.map(m => m.label).join(', ') || 'series'} for {scopeLabel(scope)}. Days the feed
+              has not reported are left blank rather than drawn as zero.
+            </p>
+          </div>
+          <Card>
+            <CardContent className="pt-6">
+              {plottedMetrics.length === 0 ? (
+                <p className="py-16 text-center text-sm text-muted-foreground">
+                  Select a metric card above to plot it.
+                </p>
+              ) : (
+                <div className="h-[320px] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                      <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#6B7280' }} stroke="#E5E7EB" tickLine={false} />
+                      {usesLeftAxis && (
+                        <YAxis yAxisId="left" tick={{ fontSize: 11, fill: '#6B7280' }} stroke="#E5E7EB" tickLine={false} axisLine={false} />
+                      )}
+                      {usesRightAxis && (
+                        <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11, fill: '#6B7280' }} stroke="#E5E7EB" tickLine={false} axisLine={false} />
+                      )}
+                      <ChartTooltip
+                        content={({ active, payload, label }) => {
+                          if (!active || !payload?.length) return null;
+                          return (
+                            <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 shadow-md">
+                              <div className="mb-1 text-xs font-medium text-gray-900">{label}</div>
+                              {payload.map((p) => {
+                                const m = chartMetrics.find(x => x.key === p.dataKey);
+                                if (!m || p.value == null) return null;
+                                return (
+                                  <div key={m.key} className="text-xs text-gray-700">
+                                    <span style={{ color: m.color }}>■</span> {m.label}: {m.fmt(Number(p.value))}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          );
+                        }}
+                      />
+                      <Legend wrapperStyle={{ fontSize: 11 }} />
+                      {plottedMetrics.map(m => (
+                        <Line
+                          key={m.key}
+                          yAxisId={m.axis}
+                          type="monotone"
+                          dataKey={m.key}
+                          name={m.label}
+                          stroke={m.color}
+                          strokeWidth={2}
+                          dot={false}
+                          // Unreported days are nulls; joining across them would
+                          // draw a trend the feed never reported.
+                          connectNulls={false}
+                        />
+                      ))}
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </section>
+      )}
 
       {/* Product Performance (per-country ASIN table) */}
       <section>

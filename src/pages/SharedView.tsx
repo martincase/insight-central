@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { format, subDays, endOfMonth } from 'date-fns';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { useApiPpcData, type AdType } from '@/hooks/useApiPpcData';
@@ -55,7 +55,7 @@ import {
 } from '@/components/dashboard/DashboardSkeletons';
 import { AIAnalystChat } from '@/components/dashboard/AIAnalystChat';
 import { useTabAvailability } from '@/hooks/useTabAvailability';
-import { UnlockDashboardModal } from '@/components/dashboard/UnlockDashboardModal';
+import { UnlockDashboardModal, UnlockDashboardStrip } from '@/components/dashboard/UnlockDashboardModal';
 import { Sparkles } from 'lucide-react';
 import { useBrandCountries } from '@/hooks/useBrandCountries';
 import { useScopedMetrics } from '@/hooks/useScopedMetrics';
@@ -152,6 +152,11 @@ export const parsePeriodFromSearch = (search: URLSearchParams | null | undefined
 /**
  * Never put a raw Postgres / transport error in front of a client.
  * Log the detail, show them something they can act on.
+ *
+ * "Please try Sync Data" used to sit in both of these. Nothing on this page
+ * syncs — the button re-runs the same queries — so a client who kept pressing
+ * it was being told to fix a feed they cannot reach. The action named here is
+ * now the one the button actually performs.
  */
 export const friendlyLoadError = (raw: unknown): string => {
   const message =
@@ -164,12 +169,12 @@ export const friendlyLoadError = (raw: unknown): string => {
           : '';
   const lower = message.toLowerCase();
   if (lower.includes('statement timeout') || lower.includes('timeout') || lower.includes('57014')) {
-    return 'This is taking longer than usual to load. Please try Sync Data, or narrow the date range.';
+    return 'This is taking longer than usual to load. Please try Refresh view, or narrow the date range.';
   }
   if (lower.includes('failed to fetch') || lower.includes('network')) {
     return 'We could not reach the data service. Please check your connection and try again.';
   }
-  return 'We could not load this data just now. Please try Sync Data, or contact hello@martincase.co.uk.';
+  return 'We could not load this data just now. Please try Refresh view, or contact hello@martincase.co.uk.';
 };
 
 interface SharedViewProps {
@@ -223,7 +228,10 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
   const { availability: tabAvailability, ready: tabAvailabilityReady } = useTabAvailability(account?.name, account?.merchantToken, account?.profileId);
   const isVendor = account?.type === 'vendor' || isVendorAccount(account?.merchantToken);
   const [unlockModalOpen, setUnlockModalOpen] = useState(false);
-  const [unlockAutoShown, setUnlockAutoShown] = useState(false);
+  // The strip is dismissed, not the modal — the modal is now only ever opened
+  // deliberately, from the header link or the strip. Key kept as-is so a client
+  // who already pressed "Don't show again" is not asked twice.
+  const [unlockStripDismissed, setUnlockStripDismissed] = useState(false);
   const dismissKey = account?.shareCode ? `unlock-modal-dismissed:${account.shareCode}` : null;
   // account.name decides whether this link IS the client's primary account —
   // 'S Green & Sons' opens on the whole business, 'Ooble Home' opens on Ooble.
@@ -280,20 +288,30 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
     if (!map[activeTab]) setActiveTab('performance');
   }, [tabAvailability, activeTab, isVendor]);
 
+  // Read the stored dismissal only — nothing opens on its own any more. Asking a
+  // client for their COGS in a modal over the data, before they had seen a
+  // single figure, was the first thing this page did.
   useEffect(() => {
-    if (!tabAvailabilityReady || unlockAutoShown || !dismissKey) return;
-    const missingBA = tabAvailability.brandAnalytics === false;
-    const missingPL = tabAvailability.profitLoss === false;
-    if (!missingBA && !missingPL) return;
+    if (!dismissKey) return;
     try {
-      if (localStorage.getItem(dismissKey) === '1') {
-        setUnlockAutoShown(true);
-        return;
-      }
+      if (localStorage.getItem(dismissKey) === '1') setUnlockStripDismissed(true);
     } catch {}
-    setUnlockModalOpen(true);
-    setUnlockAutoShown(true);
-  }, [tabAvailabilityReady, tabAvailability, unlockAutoShown, dismissKey]);
+  }, [dismissKey]);
+
+  const dismissUnlockStrip = useCallback(() => {
+    try { if (dismissKey) localStorage.setItem(dismissKey, '1'); } catch {}
+    setUnlockStripDismissed(true);
+  }, [dismissKey]);
+
+  const unlockMissing = useMemo(
+    () => ({
+      brandAnalytics: tabAvailability.brandAnalytics === false,
+      profitLoss: tabAvailability.profitLoss === false,
+    }),
+    [tabAvailability],
+  );
+  const showUnlockStrip =
+    tabAvailabilityReady && !unlockStripDismissed && (unlockMissing.brandAnalytics || unlockMissing.profitLoss);
   const [adType, setAdType] = useState<AdType>('all');
   const [loadingProgress, setLoadingProgress] = useState<{
     sales: boolean;
@@ -1025,14 +1043,22 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
                     Unlock more data
                   </button>
                 )}
-                <Button 
+                {/* "Sync Data" promised a pull from Amazon. handleRefresh only
+                    re-runs loadAccountData — the same queries against the same
+                    tables — so the label now says what the click does. The
+                    button is kept for token sessions rather than hidden: after a
+                    timeout it is the one recovery a client has, and both
+                    friendlyLoadError messages point at it. Feeds are refreshed
+                    on their own schedules, not from this page. */}
+                <Button
                   size="sm"
                   onClick={handleRefresh}
                   disabled={isRefreshing}
+                  title="Re-runs this page's queries. Amazon data is refreshed on its own schedule and is not pulled from here."
                   className="bg-gradient-to-r from-emerald-700 to-emerald-800 hover:from-emerald-800 hover:to-emerald-900 text-white shadow-md hover:shadow-lg transition-all duration-300 rounded-xl font-semibold h-8 px-2 md:px-3"
                 >
                   <RefreshCw className={`h-3.5 w-3.5 md:h-4 md:w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-                  <span className="hidden sm:inline ml-1">{isRefreshing ? 'Syncing...' : 'Sync Data'}</span>
+                  <span className="hidden sm:inline ml-1">{isRefreshing ? 'Refreshing…' : 'Refresh view'}</span>
                 </Button>
                 <DateFilterSelector
                   dateFilter={dateFilter}
@@ -1532,6 +1558,15 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
           </div>
         )}
 
+        {/* The unlock ask lives here, under the data, not over it. */}
+        {showUnlockStrip && (
+          <UnlockDashboardStrip
+            onOpen={() => setUnlockModalOpen(true)}
+            onDismiss={dismissUnlockStrip}
+            missing={unlockMissing}
+          />
+        )}
+
         {/* Branded Footer */}
         <div className="text-center py-8 border-t border-gray-200 mt-12">
           <p className="text-sm text-gray-500">
@@ -1547,13 +1582,10 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
         open={unlockModalOpen}
         onClose={() => setUnlockModalOpen(false)}
         onDontShowAgain={() => {
-          try { if (dismissKey) localStorage.setItem(dismissKey, '1'); } catch {}
+          dismissUnlockStrip();
           setUnlockModalOpen(false);
         }}
-        missing={{
-          brandAnalytics: tabAvailability.brandAnalytics === false,
-          profitLoss: tabAvailability.profitLoss === false,
-        }}
+        missing={unlockMissing}
       />
     </div>
   );

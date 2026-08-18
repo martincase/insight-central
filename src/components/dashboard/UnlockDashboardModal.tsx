@@ -1,3 +1,4 @@
+import { Sparkles, X } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 
@@ -24,6 +25,61 @@ export const UNLOCK_MODAL_COPY = {
   footerSuffix: " and we'll set it up for you.",
   gotIt: 'Got it',
   dontShow: "Don't show again",
+  /** Strip copy — the same ask, sized for a footer rather than a dialog. */
+  stripLead: 'Two sections are still switched off',
+  stripDetail: 'See what to send us',
+  stripDismiss: 'Dismiss',
+};
+
+interface UnlockDashboardStripProps {
+  onOpen: () => void;
+  onDismiss: () => void;
+  missing: { brandAnalytics: boolean; profitLoss: boolean };
+}
+
+/**
+ * The unlock ask, as a strip under the data instead of a dialog over it.
+ *
+ * It used to auto-open a modal the moment tab availability resolved, so the
+ * first thing a paying client saw was a request for their COGS — before a
+ * single figure. The ask is legitimate, its timing was not: the client reads
+ * their numbers first, and finds this at the bottom when they are done.
+ */
+export const UnlockDashboardStrip = ({ onOpen, onDismiss, missing }: UnlockDashboardStripProps) => {
+  const c = UNLOCK_MODAL_COPY;
+  const names: string[] = [];
+  if (missing.brandAnalytics) names.push(c.areas.brandAnalytics.name);
+  if (missing.profitLoss) names.push(c.areas.profitLoss.name);
+  if (names.length === 0) return null;
+
+  return (
+    <div className="mt-10 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-blue-200 bg-blue-50/70 px-4 py-3">
+      <Sparkles className="h-4 w-4 flex-shrink-0 text-blue-700" aria-hidden="true" />
+      <p className="min-w-0 flex-1 text-sm text-gray-700">
+        <span className="font-medium text-gray-900">
+          {names.length === 1 ? 'One section is still switched off' : c.stripLead}
+        </span>{' '}
+        — {names.join(' and ')}. We need data access from you before {names.length === 1 ? 'it' : 'they'} can show.
+      </p>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={onOpen}
+        className="h-8 border-blue-300 bg-white text-blue-800 hover:bg-blue-100"
+      >
+        {c.stripDetail}
+      </Button>
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={onDismiss}
+        aria-label={c.stripDismiss}
+        className="h-8 w-8 p-0 text-gray-500 hover:text-gray-800"
+      >
+        <X className="h-4 w-4" aria-hidden="true" />
+      </Button>
+    </div>
+  );
 };
 
 interface UnlockDashboardModalProps {

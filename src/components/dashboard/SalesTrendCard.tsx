@@ -59,6 +59,17 @@ export function SalesTrendCard({ spid, scope, dateFilter, customDateRange, onDri
   const isRollup = isRollupScope(scope);
   const wxCountry = isRollup ? (primaryCountry || 'GB') : scopeArea(scope);
   const wxCountryName = getCountryName(wxCountry);
+  // On a rollup the weather is ONE country's, sitting under a line that may
+  // cover twelve. Where the registry names a primary market the widget says so
+  // on its face; where it does not, the country here is a bare 'GB' default and
+  // there is nothing honest to call it, so the overlay is withheld rather than
+  // labelled "United Kingdom" to a client trading across Europe.
+  const wxIsPrimaryFallback = isRollup && !primaryCountry;
+  const wxLabel = isRollup && primaryCountry
+    ? `${wxCountryName} (primary market)`
+    : wxCountryName;
+  /** Withheld scopes must not keep drawing the overlay a previous scope switched on. */
+  const weatherOn = showWeather && !wxIsPrimaryFallback;
   const cur = getCurrencyInfo(scope);
   const fmtMoney = (v: number) =>
     formatMoney(v ?? 0, cur, 0);
@@ -236,17 +247,17 @@ export function SalesTrendCard({ spid, scope, dateFilter, customDateRange, onDri
                   </Select>
                 </div>
               )}
-              {weather.length > 0 && (
+              {weather.length > 0 && !wxIsPrimaryFallback && (
                 <button
                   type="button"
                   onClick={() => setShowWeather((v) => !v)}
                   className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full border text-xs transition ${
                     showWeather ? 'bg-background border-border' : 'bg-muted/40 border-transparent text-muted-foreground'
                   }`}
-                  title={`${wxCountryName} capital-city daily mean temperature`}
+                  title={`${wxCountryName} capital-city daily mean temperature${isRollup ? ' — one market only, while these sales cover the whole scope' : ''}`}
                 >
                   <span className="h-2 w-2 rounded-full" style={{ backgroundColor: showWeather ? '#64748B' : 'transparent', border: showWeather ? 'none' : '1px solid #64748B' }} />
-                  Weather · {wxCountryName} (°C)
+                  Weather · {wxLabel} (°C)
                 </button>
               )}
             </div>
@@ -257,7 +268,7 @@ export function SalesTrendCard({ spid, scope, dateFilter, customDateRange, onDri
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                   <XAxis dataKey="bucket" tickFormatter={(v) => format(new Date(v), 'dd MMM')} tick={{ fontSize: 11 }} />
                   <YAxis yAxisId="left" tickFormatter={(v) => fmtMoney(v as number)} tick={{ fontSize: 11 }} width={70} />
-                  {showWeather && (
+                  {weatherOn && (
                     <YAxis
                       yAxisId="temp"
                       orientation="right"
@@ -305,7 +316,7 @@ export function SalesTrendCard({ spid, scope, dateFilter, customDateRange, onDri
                   ) : (
                     <Line yAxisId="left" type="monotone" dataKey="__total" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} name={`Sales (${cur.code})`} isAnimationActive={false} />
                   )}
-                  {showWeather && (
+                  {weatherOn && (
                     <Line
                       yAxisId="temp"
                       type="monotone"
@@ -315,7 +326,7 @@ export function SalesTrendCard({ spid, scope, dateFilter, customDateRange, onDri
                       strokeDasharray="4 3"
                       dot={false}
                       connectNulls
-                      name={`Temp (${wxCountryName})`}
+                      name={`Temp (${wxLabel})`}
                       isAnimationActive={false}
                     />
                   )}
