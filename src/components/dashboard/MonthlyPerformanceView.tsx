@@ -1235,6 +1235,19 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
           from.setDate(from.getDate() - VENDOR_LAG_DAYS);
           to.setDate(to.getDate() - VENDOR_LAG_DAYS);
         }
+        // getDateRangeFromFilter ends "last-14-days" on TODAY, while the rest of
+        // the dashboard (getCurrentDateRange) ends it on YESTERDAY. Before padding
+        // that mismatch was invisible, because the extra day simply carried no row
+        // and drew nothing. Padding would materialise it as a real, permanently
+        // empty tick — Cottam showed a header of 4-17 Aug above a chart running
+        // 4-18. Clamp the padded window so it can never reach today or beyond;
+        // today's figures are never complete anyway, and a "this-week"/"this-month"
+        // filter would otherwise pad days that have not happened yet.
+        const lastPaddable = new Date();
+        lastPaddable.setHours(0, 0, 0, 0);
+        lastPaddable.setDate(lastPaddable.getDate() - 1 - (isVendor ? VENDOR_LAG_DAYS : 0));
+        if (to > lastPaddable) to.setTime(lastPaddable.getTime());
+
         // Nothing at all stays nothing at all — a window of pure gaps is the
         // "no historical data" empty state, not a chart.
         const spanDays = Math.ceil((to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24));
