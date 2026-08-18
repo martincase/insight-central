@@ -6,7 +6,8 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { getCountryFlagImage, getCountryName } from '@/utils/countryUtils';
+import { getCountryName } from '@/utils/countryUtils';
+import { CountryFlag } from '@/components/dashboard/CountryFlag';
 import { Lock, Search } from 'lucide-react';
 
 interface Row {
@@ -154,7 +155,6 @@ export function MarketplacesTab() {
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
                     {g.list.map((r) => {
-                      const flag = getCountryFlagImage(r.country_code);
                       const locked = r.is_primary;
                       return (
                         <label
@@ -168,7 +168,7 @@ export function MarketplacesTab() {
                             disabled={locked || savingId === r.id}
                             onCheckedChange={(v) => toggle(r, !!v)}
                           />
-                          {flag && <img src={flag} alt="" className="h-3.5 w-5 object-cover rounded-sm" />}
+                          <CountryFlag code={r.country_code} />
                           <span className="flex-1 truncate">{getCountryName(r.country_code)}</span>
                           {locked && (
                             <Badge variant="secondary" className="text-[9px] px-1.5 py-0 h-4 gap-1">

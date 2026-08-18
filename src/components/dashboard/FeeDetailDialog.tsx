@@ -4,7 +4,8 @@ import { supabase } from '@/integrations/supabase/client';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { getCountryName, getCountryFlagImage } from '@/utils/countryUtils';
+import { getCountryName } from '@/utils/countryUtils';
+import { CountryFlag } from './CountryFlag';
 import { getCurrencyInfo } from '@/utils/currencyUtils';
 import { formatMoney } from '@/utils/formatters';
 import { CountryScope } from './CountrySwitcher';
@@ -226,13 +227,12 @@ export function FeeDetailDialog({
               </TableHeader>
               <TableBody>
                 {countryRows.map((r) => {
-                  const flag = getCountryFlagImage(r.code);
                   const pct = r.sales > 0 ? r.amount / r.sales : 0;
                   return (
                     <TableRow key={r.code}>
                       <TableCell>
                         <span className="inline-flex items-center gap-2">
-                          {flag && <img src={flag} alt="" className="h-3.5 w-5 object-cover rounded-sm" />}
+                          <CountryFlag code={r.code} />
                           {getCountryName(r.code)}
                         </span>
                       </TableCell>

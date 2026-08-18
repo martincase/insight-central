@@ -5,7 +5,7 @@ import { useApiPpcData, type AdType } from '@/hooks/useApiPpcData';
 import { calculatePeriodData, getCurrentDateRange, getPreviousDateRange } from '@/utils/dataProcessor';
 import { AccountData, DateFilter, ASINData, InventoryData } from '@/types/dashboard';
 import { normalizedBrandName } from '@/utils/shareUtils';
-import { getCountryInfo, getCountryFlagImage, getCountryName } from '@/utils/countryUtils';
+import { getCountryInfo, getCountryName } from '@/utils/countryUtils';
 import { processInventoryData, fetchInventoryData } from '@/utils/inventoryProcessor';
 import { processASINData, detectMissingDates, getASINFallbackInfo, getVendorCurrentDateRange } from '@/utils/asinProcessor';
 import { updateAccountsWithFilteredData } from '@/utils/dataProcessor';
@@ -60,6 +60,7 @@ import { Sparkles } from 'lucide-react';
 import { useBrandCountries } from '@/hooks/useBrandCountries';
 import { useScopedMetrics } from '@/hooks/useScopedMetrics';
 import { CountrySwitcher, type CountryScope } from '@/components/dashboard/CountrySwitcher';
+import { CountryFlag } from '@/components/dashboard/CountryFlag';
 import { isRollupScope, scopeArea, scopeArm } from '@/utils/scope';
 import { MultiCountryPanel } from '@/components/dashboard/MultiCountryPanel';
 import { SalesTrendCard } from '@/components/dashboard/SalesTrendCard';
@@ -893,10 +894,9 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
   const countryInfo = getCountryInfo(account.merchantToken);
   const scopeAreaCode = scopeArea(effectiveScope);
   const scopeArmName = scopeArm(effectiveScope);
-  const scopeFlag =
-    scopeAreaCode === 'ALL_EU' ? '/flags/eu.svg'
-    : scopeAreaCode === 'ALL' ? '/flags/world.svg'
-    : getCountryFlagImage(scopeAreaCode) || countryInfo.flagImage;
+  // Flag resolution (including the country-code fallback for markets we hold no
+  // artwork for) lives in one place now — see components/dashboard/CountryFlag.
+  const scopeFlagCode = scopeAreaCode || countryInfo.code || '';
   const scopeName = (() => {
     const area =
       scopeAreaCode === 'ALL_EU' ? 'All EU'
@@ -1085,13 +1085,7 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
           {/* Focused Account Section */}
           <div className="bg-gradient-to-r from-blue-50 to-cyan-50 px-3 py-2 md:px-6 md:py-4 border-t border-blue-100">
             <div className="flex items-center gap-2 md:gap-3">
-              {scopeFlag && (
-                <img 
-                  src={scopeFlag} 
-                  alt={scopeName} 
-                  className="w-6 h-4 md:w-10 md:h-7 object-cover rounded-sm shadow-sm flex-shrink-0" 
-                />
-              )}
+              <CountryFlag code={scopeFlagCode} size="lg" alt={scopeName} className="shadow-sm" />
               <h2 className="text-base md:text-xl font-bold text-gray-900 truncate">
                 {/* One business, one name. The share link resolves to a single
                     Amazon account ('S Green & Sons' the vendor), but the page
@@ -1129,18 +1123,14 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
               </span>
             </div>
             {brandCountries.isMultiCountry && (
-              <div className="mt-3 flex items-center gap-2 flex-wrap">
-                <span className="text-[10px] md:text-xs uppercase tracking-wide text-gray-500 font-semibold">
-                  {brandCountries.hasMultipleArms ? 'Business scope' : 'Country scope'}
-                </span>
-                <CountrySwitcher
-                  countries={brandCountries.countries}
-                  scope={effectiveScope}
-                  onChange={setCountryScope}
-                  arms={brandCountries.arms}
-                  clientName={brandCountries.clientName}
-                />
-              </div>
+              <CountrySwitcher
+                className="mt-3"
+                countries={brandCountries.countries}
+                scope={effectiveScope}
+                onChange={setCountryScope}
+                arms={brandCountries.arms}
+                clientName={brandCountries.clientName}
+              />
             )}
           </div>
         </div>
