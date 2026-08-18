@@ -1469,18 +1469,13 @@ const Index = () => {
 
                   {focusedBrandCountries.isMultiCountry && focusedBrandCountries.spid && (
                     <div className="space-y-3">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-[10px] md:text-xs uppercase tracking-wide text-gray-500 font-semibold">
-                          {focusedBrandCountries.hasMultipleArms ? 'Business scope' : 'Country scope'}
-                        </span>
-                        <CountrySwitcher
-                          countries={focusedBrandCountries.countries}
-                          scope={effectiveFocusedScope}
-                          onChange={setFocusedCountryScope}
-                          arms={focusedBrandCountries.arms}
-                          clientName={focusedBrandCountries.clientName}
-                        />
-                      </div>
+                      <CountrySwitcher
+                        countries={focusedBrandCountries.countries}
+                        scope={effectiveFocusedScope}
+                        onChange={setFocusedCountryScope}
+                        arms={focusedBrandCountries.arms}
+                        clientName={focusedBrandCountries.clientName}
+                      />
                       {isRollupScope(effectiveFocusedScope) && (
                         <MultiCountryPanel
                           spid={focusedBrandCountries.spid}

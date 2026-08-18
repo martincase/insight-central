@@ -5,7 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatCurrencyByCountry } from '@/utils/formatters';
-import { getCountryName, getCountryFlagImage } from '@/utils/countryUtils';
+import { getCountryName } from '@/utils/countryUtils';
+import { CountryFlag } from './CountryFlag';
 import { CountryScope } from './CountrySwitcher';
 import { DateFilter } from '@/types/dashboard';
 import { getCurrentDateRange } from '@/utils/dataProcessor';
@@ -258,12 +259,11 @@ export function MultiCountryPanel({ spid, scope, dateFilter, customDateRange }: 
                     .slice()
                     .sort((a, b) => Number(b.sales_gbp || 0) - Number(a.sales_gbp || 0))
                     .map((r) => {
-                      const flag = getCountryFlagImage(r.country_code);
                       return (
                         <TableRow key={`${r.marketplace_id || r.country_code}-${r.arm ?? ''}`}>
                           <TableCell>
                             <span className="inline-flex items-center gap-2">
-                              {flag && <img src={flag} alt="" className="h-3.5 w-5 object-cover rounded-sm" />}
+                              <CountryFlag code={r.country_code} />
                               {rowLabel(r)}
                             </span>
                           </TableCell>
@@ -490,12 +490,11 @@ export function MultiCountryPanel({ spid, scope, dateFilter, customDateRange }: 
                     .slice()
                     .sort((a, b) => Number(b.ad_spend_gbp || 0) - Number(a.ad_spend_gbp || 0))
                     .map((r) => {
-                      const flag = getCountryFlagImage(r.country_code);
                       return (
                         <TableRow key={r.marketplace_id || r.country_code}>
                           <TableCell>
                             <span className="inline-flex items-center gap-2">
-                              {flag && <img src={flag} alt="" className="h-3.5 w-5 object-cover rounded-sm" />}
+                              <CountryFlag code={r.country_code} />
                               {getCountryName(r.country_code)}
                             </span>
                           </TableCell>

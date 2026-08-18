@@ -6,7 +6,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { PieChart, Pie, Cell, Tooltip as RTooltip, ResponsiveContainer } from 'recharts';
 import { formatCurrencyByCountry } from '@/utils/formatters';
-import { getCountryName, getCountryFlagImage } from '@/utils/countryUtils';
+import { getCountryName } from '@/utils/countryUtils';
+import { CountryFlag } from './CountryFlag';
 import { getCurrencyInfo } from '@/utils/currencyUtils';
 import { CountryScope } from './CountrySwitcher';
 import { DateFilter } from '@/types/dashboard';
@@ -477,7 +478,6 @@ export function PnlDashboard({ spid, scope, dateFilter, customDateRange }: Props
                       .slice()
                       .sort((a, b) => Number(b.sales_gbp || 0) - Number(a.sales_gbp || 0))
                       .map((r) => {
-                        const flag = getCountryFlagImage(r.country_code);
                         const sales = Number(r.sales_gbp || 0);
                         const profit = Number(r.profit_gbp || 0);
                         const margin = sales > 0 ? profit / sales : 0;
@@ -485,7 +485,7 @@ export function PnlDashboard({ spid, scope, dateFilter, customDateRange }: Props
                           <TableRow key={r.marketplace_id || r.country_code}>
                             <TableCell>
                               <span className="inline-flex items-center gap-2">
-                                {flag && <img src={flag} alt="" className="h-3.5 w-5 object-cover rounded-sm" />}
+                                <CountryFlag code={r.country_code} />
                                 {getCountryName(r.country_code)}
                               </span>
                             </TableCell>

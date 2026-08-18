@@ -5,7 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceArea } from 'recharts';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { getCountryName, getCountryFlagImage } from '@/utils/countryUtils';
+import { getCountryName } from '@/utils/countryUtils';
+import { CountryFlag } from './CountryFlag';
 import { CountryScope } from './CountrySwitcher';
 import { isRollupScope, scopeArea } from '@/utils/scope';
 import { DateFilter } from '@/types/dashboard';
@@ -182,7 +183,6 @@ export function SalesTrendCard({ spid, scope, dateFilter, customDateRange, onDri
                 {trendCountries.map((cc, i) => {
                   const active = visibleCountries.has(cc);
                   const color = colorFor(cc, i);
-                  const flag = getCountryFlagImage(cc);
                   return (
                     <button
                       key={cc}
@@ -193,7 +193,7 @@ export function SalesTrendCard({ spid, scope, dateFilter, customDateRange, onDri
                       }`}
                     >
                       <span className="h-2 w-2 rounded-full" style={{ backgroundColor: active ? color : 'transparent', border: active ? 'none' : `1px solid ${color}` }} />
-                      {flag && <img src={flag} alt="" className="h-3 w-4 object-cover rounded-sm" />}
+                      <CountryFlag code={cc} className="h-3 w-4" />
                       {getCountryName(cc)}
                     </button>
                   );
