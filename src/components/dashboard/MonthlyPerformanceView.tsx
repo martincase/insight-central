@@ -267,6 +267,37 @@ const getDateRangeFromFilter = (dateFilter?: string, customDateRange?: { from: D
   return { from: startDate, to: endDate };
 };
 
+/** The x-axis label a daily bucket carries. Must match every daily aggregator above. */
+const dayLabel = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+/**
+ * Give the chart the whole window the client selected.
+ *
+ * Days the feed reported nothing for are dropped before this point, and being
+ * dropped they took the x-axis with them: Cottam's header said 4–17 Aug, the
+ * heatmap said 4–17, and the chart underneath ran 5–16. Padding puts the
+ * missing days back as EMPTY rows — no metric keys at all, so recharts leaves a
+ * gap rather than drawing a fall to zero the account never had. The axis now
+ * spans the same fortnight as everything else on the page.
+ *
+ * Only for daily series. A monthly series is already labelled by month and the
+ * same padding would invent months.
+ */
+const padDailyToWindow = (rows: MonthlyData[], from: Date, to: Date): MonthlyData[] => {
+  const byLabel = new Map(rows.map(r => [r.month, r]));
+  const cursor = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+  const last = new Date(to.getFullYear(), to.getMonth(), to.getDate());
+  const padded: MonthlyData[] = [];
+  while (cursor <= last) {
+    const label = dayLabel(cursor);
+    padded.push(
+      byLabel.get(label) ?? ({ month: label, year: cursor.getFullYear() } as MonthlyData),
+    );
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return padded;
+};
+
 // Fetch real historical data based on date filter with dynamic aggregation
 const fetchHistoricalData = async (
   merchantToken: string, 
@@ -1189,7 +1220,29 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
         const hasPpcData = item.ppcSpend > 0 || item.ppcSales > 0 || item.impressions > 0 || item.clicks > 0;
         return hasSalesData || hasPpcData;
       });
-      
+
+      // …then put the empty days back as gaps, so the x-axis covers the period
+      // the header and the heatmap are already showing. Vendors are plotted on
+      // the lagged window the fetchers query, not the raw selection, or the
+      // three most recent days would pad as permanently blank.
+      {
+        const selected = dateFilter === 'custom' && customDateRange
+          ? customDateRange
+          : getDateRangeFromFilter(dateFilter);
+        const from = new Date(selected.from);
+        const to = new Date(selected.to);
+        if (isVendor) {
+          from.setDate(from.getDate() - VENDOR_LAG_DAYS);
+          to.setDate(to.getDate() - VENDOR_LAG_DAYS);
+        }
+        // Nothing at all stays nothing at all — a window of pure gaps is the
+        // "no historical data" empty state, not a chart.
+        const spanDays = Math.ceil((to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24));
+        if (spanDays <= 62 && historicalData.length > 0) {
+          historicalData = padDailyToWindow(historicalData, from, to);
+        }
+      }
+
       console.log('MonthlyPerformanceView: Fetched historical data:', historicalData.length, 'data points');
       if (historicalData.length > 0) {
         console.log('MonthlyPerformanceView: Sample data point:', historicalData[0]);
@@ -1333,6 +1386,10 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
                             <p className="font-semibold text-gray-900 mb-2">{label}</p>
                             {payload.map((entry: any, index: number) => {
                               const metric = METRICS.find(m => m.key === entry.dataKey);
+                              // Padded days carry no value at all. Formatting one
+                              // would print a zero the feed never reported — and
+                              // the percentage formatters would throw first.
+                              if (entry.value === null || entry.value === undefined) return null;
                               return (
                                 <div key={index} className="flex items-center gap-2 mb-1">
                                   <div 

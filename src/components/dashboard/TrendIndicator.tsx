@@ -74,7 +74,7 @@ export const TrendIndicator = ({
 
   const baselineCaption = (extra?: string) => {
     if (!comparison || !showBaselineOnFace) return null;
-    const text = [comparison.short, extra ?? comparison.lengthNote].filter(Boolean).join(' · ');
+    const text = [comparison.short, comparison.lengthNote, extra].filter(Boolean).join(' · ');
     return (
       <span className="text-[10px] leading-tight text-gray-500 font-normal whitespace-normal">
         {text}
@@ -82,8 +82,8 @@ export const TrendIndicator = ({
     );
   };
 
-  const wrap = (badge: JSX.Element, detail?: string) => {
-    const caption = baselineCaption();
+  const wrap = (badge: JSX.Element, detail?: string, captionExtra?: string) => {
+    const caption = baselineCaption(captionExtra);
     const body = caption ? (
       <span className={stacked ? 'inline-flex flex-col items-end gap-0' : 'inline-flex flex-wrap items-center gap-x-1.5 gap-y-0'}>
         {badge}
@@ -139,7 +139,10 @@ export const TrendIndicator = ({
   const displayValue = showAbsoluteDifference ? Math.abs(absoluteDifference) : Math.abs(percentChange);
   const displayText = isStatic && !showAbsoluteDifference ? '0.0%' : `${displayValue.toFixed(1)}%`;
 
-  const directionWord = isUp ? 'up' : isDown ? 'down' : 'unchanged';
+  // Zero has no direction. CPC printed "£0.31, 0.0% down" — a falling arrow on
+  // a move too small to print — because the arrow was chosen from the raw sign
+  // rather than from what the badge actually says.
+  const directionWord = isStatic ? 'unchanged' : isUp ? 'up' : 'down';
   const valenceWord = VALENCE_WORD[valence];
 
   const valenceMark =
@@ -163,12 +166,12 @@ export const TrendIndicator = ({
         valence === 'better' ? 'text-green-600' : valence === 'worse' ? 'text-red-600' : 'text-gray-500'
       } ${className}`}
     >
-      {isUp ? (
-        <TrendingUp className="h-3 w-3 mr-1" aria-hidden="true" />
-      ) : isDown ? (
-        <TrendingDown className="h-3 w-3 mr-1" aria-hidden="true" />
-      ) : (
+      {isStatic ? (
         <Minus className="h-3 w-3 mr-1" aria-hidden="true" />
+      ) : isUp ? (
+        <TrendingUp className="h-3 w-3 mr-1" aria-hidden="true" />
+      ) : (
+        <TrendingDown className="h-3 w-3 mr-1" aria-hidden="true" />
       )}
       <span>{displayText}</span>
       {valenceMark}
@@ -178,5 +181,17 @@ export const TrendIndicator = ({
     </span>
   );
 
-  return wrap(badge, comparison?.detail);
+  // A delta on a metric that is itself a percentage has two readings. Buy Box
+  // going 84.9% → 85.0% is a 0.1 percentage-POINT move and a 0.1% RELATIVE one,
+  // and "0.1% worse" on the card face never said which. This badge has always
+  // shown the relative change; it now says so, and prints both figures and the
+  // percentage-point move so the other reading is there too.
+  const showsRelativePercent = isPercentage && !showAbsoluteDifference;
+  const relativeNote = showsRelativePercent
+    ? `The ${displayText} is a relative change: ${previousValue.toFixed(1)}% → ${currentValue.toFixed(1)}%, `
+      + `a ${Math.abs(currentValue - previousValue).toFixed(1)} percentage-point move.`
+    : undefined;
+  const detail = [comparison?.detail, relativeNote].filter(Boolean).join(' ') || undefined;
+
+  return wrap(badge, detail, showsRelativePercent ? 'relative change' : undefined);
 };

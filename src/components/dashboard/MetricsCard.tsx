@@ -39,6 +39,17 @@ interface MetricsCardProps {
    */
   comparisonSuppressedReason?: string;
   /**
+   * The previous period's figure formatted EXACTLY as `value` is.
+   *
+   * When both periods print the same thing, the delta is a claim the card
+   * cannot show its working for: CTR read "0.3%" in both periods and still
+   * announced "3.8% better" (the whole move was impressions falling faster
+   * than clicks). Supplying this replaces the badge with a plain statement
+   * instead of asking the client to reconcile two numbers that agree.
+   * Only worth passing on rate/money cards, whose display precision is coarse.
+   */
+  previousDisplayValue?: string;
+  /**
    * Short qualifier printed against the headline figure, e.g. "2 of 31 days".
    * Use when the number is real but is not the period total it appears to be.
    */
@@ -61,8 +72,15 @@ export const MetricsCard = ({
   subtitle,
   seriesSemantics,
   comparisonSuppressedReason,
+  previousDisplayValue,
   qualifier,
 }: MetricsCardProps) => {
+  // '—' is "we have no figure", not a figure that happens to match.
+  const roundsToSame =
+    !!previousDisplayValue && previousDisplayValue === value && value !== '—';
+  const suppressedReason =
+    comparisonSuppressedReason
+    ?? (roundsToSame ? `No change at this precision — both periods show ${value}` : undefined);
   const sumCheck = seriesSemantics === 'sum'
     ? checkTotalAgainstSeries(currentValue, sparklineData)
     : null;
@@ -173,9 +191,9 @@ export const MetricsCard = ({
           {/* Change vs baseline — sits directly under the headline number so the
               big figure is never carried by colour alone. */}
           <div className="-mt-0.5">
-            {comparisonSuppressedReason ? (
-              <p className="text-[10px] md:text-[11px] text-amber-700 leading-tight">
-                {comparisonSuppressedReason}
+            {suppressedReason ? (
+              <p className={`text-[10px] md:text-[11px] leading-tight ${roundsToSame && !comparisonSuppressedReason ? 'text-gray-500' : 'text-amber-700'}`}>
+                {suppressedReason}
               </p>
             ) : (
               <TrendIndicator

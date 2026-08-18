@@ -538,6 +538,7 @@ export const MetricsGrid = ({
                   color="text-purple-600"
                   currentValue={rateDelta(ppcAcos)}
                   previousValue={rateDelta(prevPpcAcos)}
+                  previousDisplayValue={ratePct(prevPpcAcos)}
                   comparisonLabel={comparisonLabel}
                   isPercentage={true}
                   onClick={chartToggleFor('acos')}
@@ -551,6 +552,7 @@ export const MetricsGrid = ({
                   color="text-amber-600"
                   currentValue={rateDelta(ppcCpc)}
                   previousValue={rateDelta(prevPpcCpc)}
+                  previousDisplayValue={rateMoney(prevPpcCpc)}
                   comparisonLabel={comparisonLabel}
                 />
               </div>
@@ -663,6 +665,7 @@ export const MetricsGrid = ({
               color="text-purple-600"
               currentValue={rateDelta(ppcAcos)}
               previousValue={rateDelta(prevPpcAcos)}
+              previousDisplayValue={ratePct(prevPpcAcos)}
               comparisonLabel={comparisonLabel}
               isPercentage={true}
               onClick={chartToggleFor('acos')}
@@ -678,6 +681,7 @@ export const MetricsGrid = ({
               color="text-cyan-600"
               currentValue={rateDelta(tacos)}
               previousValue={rateDelta(prevTacos)}
+              previousDisplayValue={ratePct(prevTacos)}
               comparisonLabel={comparisonLabel}
               isPercentage={true}
               onClick={chartToggleFor('tacos')}
@@ -693,6 +697,7 @@ export const MetricsGrid = ({
               color="text-amber-600"
               currentValue={rateDelta(advertisingReliance)}
               previousValue={rateDelta(prevAdvertisingReliance)}
+              previousDisplayValue={ratePct(prevAdvertisingReliance)}
               comparisonLabel={comparisonLabel}
               isPercentage={true}
               onClick={chartToggleFor('advertisingReliance')}
@@ -735,6 +740,7 @@ export const MetricsGrid = ({
               color="text-orange-600"
               currentValue={rateDelta(ppcCpc)}
               previousValue={rateDelta(prevPpcCpc)}
+              previousDisplayValue={rateMoney(prevPpcCpc)}
               comparisonLabel={comparisonLabel}
               onClick={chartToggleFor('cpc')}
               isSelected={chartSelected('cpc')}
@@ -747,6 +753,7 @@ export const MetricsGrid = ({
               color="text-blue-600"
               currentValue={rateDelta(ppcCtr)}
               previousValue={rateDelta(prevPpcCtr)}
+              previousDisplayValue={ratePct(prevPpcCtr)}
               comparisonLabel={comparisonLabel}
               isPercentage={true}
               onClick={chartToggleFor('ctr')}
@@ -761,6 +768,7 @@ export const MetricsGrid = ({
               color="text-orange-600"
               currentValue={rateDelta(ppcCpa)}
               previousValue={rateDelta(prevPpcCpa)}
+              previousDisplayValue={rateMoney(prevPpcCpa)}
               comparisonLabel={comparisonLabel}
               onClick={chartToggleFor('cpa')}
               isSelected={chartSelected('cpa')}
@@ -802,10 +810,22 @@ export const MetricsGrid = ({
 
               <MetricsCard
                 title="Buy Box %"
+                // Not a plain average of the daily figures. useScopedMetrics
+                // weights each reported day by its page views (falling back to
+                // an unweighted mean only when the scope reports no page views
+                // at all), so a quiet day cannot pull the period figure about as
+                // hard as a busy one. Said out loud because the number does not
+                // reproduce from the daily cells without it.
+                info={
+                  scoped
+                    ? 'Weighted by page views across the days in this period, not a plain average of the daily figures — a day with few page views moves it less than a busy one. Days the feed did not report are left out entirely. Where the scope reports no page views at all, an unweighted mean is used instead.'
+                    : 'An unweighted average across the accounts shown.'
+                }
                 value={orgPct(avgBuyBoxPercentage)}
                 color="text-yellow-600"
                 currentValue={avgBuyBoxPercentage}
                 previousValue={avgPreviousBuyBoxPercentage}
+                previousDisplayValue={orgPct(avgPreviousBuyBoxPercentage)}
               comparisonLabel={comparisonLabel}
                 isPercentage={true}
                 onClick={chartToggleFor('buyBoxPercentage')}

@@ -314,7 +314,10 @@ export const StockoutImpactSection = ({ merchantToken, accountKeys, scope }: Sto
       icon: Clock,
       color: 'text-amber-600',
       tooltip: hasEstimate
-        ? 'Additional revenue expected to be lost during the recovery period after restocking. Amazon estimates 1 week OOS = ~1 month to regain full sales velocity. During recovery, sales gradually ramp from ~25% back to 100% of normal levels.'
+        // Our model, stated as ours. It used to be attributed to Amazon, which
+        // we cannot cite — so it read as Amazon's published guidance when it is
+        // Martin Case's working assumption.
+        ? 'Additional revenue we expect to be lost during the recovery period after restocking. This is our own estimate, not a figure published by Amazon: we allow roughly one month to regain full sales velocity for each week out of stock, with sales ramping from about 25% back to 100% of the pre-stockout daily rate.'
         : noEstimateTip,
       showPeriod: hasEstimate,
       sub: hasEstimate ? null : 'no estimate available',
@@ -448,7 +451,10 @@ export const StockoutImpactSection = ({ merchantToken, accountKeys, scope }: Sto
           </p>
         </div>
         <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
-          💡 <strong>Recovery Model:</strong> Based on Amazon's guideline that every 1 week of stockout requires ~1 month to recover previous sales levels. Recovery assumes a gradual ramp from 25% to 100% of pre-stockout daily sales rate.
+          💡 <strong>Recovery model:</strong> our own estimate, not a figure published by Amazon. We allow roughly
+          one month to return to previous sales levels for every week out of stock, and assume sales ramp gradually
+          from about 25% back to 100% of the pre-stockout daily rate. Treat the recovery figures as an indication of
+          scale rather than a measured loss.
         </div>
 
         {/* Table */}
