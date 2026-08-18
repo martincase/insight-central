@@ -16,6 +16,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { MetricsGrid } from '@/components/dashboard/MetricsGrid';
 import { SalesHeatmap } from '@/components/dashboard/SalesHeatmap';
 import { MonthlyPerformanceView } from '@/components/dashboard/MonthlyPerformanceView';
+import { useChartMetrics } from '@/hooks/useChartMetrics';
 import { MonthlyPerformanceTable } from '@/components/dashboard/MonthlyPerformanceTable';
 import { ASINDataTable } from '@/components/dashboard/ASINDataTable';
 import { InventoryTable } from '@/components/dashboard/InventoryTable';
@@ -213,7 +214,7 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
     !!customDateRange &&
     customDateRange.from.getTime() === deepLinkPeriod.from.getTime() &&
     customDateRange.to.getTime() === deepLinkPeriod.to.getTime();
-  const [selectedChartMetrics, setSelectedChartMetrics] = useState<string[]>(['sales', 'ppcSales']);
+  const { selectedChartMetrics, toggleChartMetric } = useChartMetrics();
   const [isRefreshing, setIsRefreshing] = useState(false);
   /** Client-safe message for a failed data load — never raw Postgres text. */
   const [dataError, setDataError] = useState<string | null>(null);
@@ -371,14 +372,6 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
 
   // Feature flag to control ASIN functionality in SharedView
   const ASIN_FEATURE_ENABLED = true;
-
-  const toggleChartMetric = (metricKey: string) => {
-    setSelectedChartMetrics(prev => 
-      prev.includes(metricKey) 
-        ? prev.filter(m => m !== metricKey)
-        : [...prev, metricKey]
-    );
-  };
 
   // Not one row of client data is fetched until access is granted. Gating only the
   // render would still have handed a tokenless visitor the whole account over the

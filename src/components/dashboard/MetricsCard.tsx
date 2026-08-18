@@ -3,6 +3,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { TrendIndicator } from './TrendIndicator';
 import { InfoTooltip } from '@/components/common/InfoTooltip';
 import { LineChart, Line, ResponsiveContainer } from 'recharts';
+import { Check, Plus } from 'lucide-react';
 import { checkTotalAgainstSeries } from '@/utils/kpiIntegrity';
 import type { ComparisonLabel } from '@/utils/comparisonLabels';
 
@@ -77,19 +78,52 @@ export const MetricsCard = ({
 
   return (
     <Card
-      className={`group border shadow-sm transition-all duration-200 bg-white/70 backdrop-blur-sm ${
-        onClick ? 'cursor-pointer hover:shadow-md' : ''
+      className={`group relative border shadow-sm transition-all duration-200 bg-white/70 backdrop-blur-sm ${
+        onClick
+          ? 'cursor-pointer hover:shadow-md hover:-translate-y-0.5 hover:border-blue-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2'
+          : ''
       } ${
         isSelected
-          ? 'border-blue-500 bg-blue-50/50'
+          ? 'border-blue-500 bg-blue-50/50 ring-1 ring-blue-500/40'
           : 'border-gray-200 hover:border-gray-300'
       }`}
       onClick={onClick}
+      // A card that changes the chart is a control, so it behaves like one:
+      // reachable by keyboard and announced with its on/off state. It looked
+      // like a static tile before, which is why nobody found the interaction.
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      aria-pressed={onClick ? isSelected : undefined}
+      onKeyDown={
+        onClick
+          ? (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onClick();
+              }
+            }
+          : undefined
+      }
     >
+      {/* The affordance, on the card face rather than only after the fact.
+          A filled tick means the series is already plotted; the outlined plus
+          appears on hover/focus so the tile reads as pressable at a glance. */}
+      {onClick && (
+        <span
+          aria-hidden="true"
+          className={`absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full border transition-opacity ${
+            isSelected
+              ? 'border-blue-500 bg-blue-500 text-white opacity-100'
+              : 'border-gray-300 bg-white text-gray-400 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100'
+          }`}
+        >
+          {isSelected ? <Check className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
+        </span>
+      )}
       <CardContent className="p-3 md:p-6">
         <div className="space-y-2 md:space-y-3">
-          {/* Title */}
-          <div className="flex items-center justify-between gap-2">
+          {/* Title — kept clear of the add/remove badge pinned top-right */}
+          <div className={`flex items-center justify-between gap-2 ${onClick ? 'pr-5' : ''}`}>
             <h3 className="text-[10px] md:text-xs font-medium text-gray-500 uppercase tracking-wide truncate flex items-center gap-1">
               <span className="truncate">{title}</span>
               {info && <InfoTooltip content={info} />}
@@ -158,11 +192,19 @@ export const MetricsCard = ({
             <p className="text-[10px] md:text-[11px] text-muted-foreground leading-tight">{subtitle}</p>
           )}
 
-          {/* Selection indicator */}
-          {isSelected && onClick && (
-            <div className="text-xs text-blue-600 font-medium">
-              Added to chart
-            </div>
+          {/* Selection indicator. The unselected copy is shown on hover only —
+              printing it on every card at rest would shout over the numbers,
+              but leaving it off entirely is how the feature stayed hidden. */}
+          {onClick && (
+            isSelected ? (
+              <div className="text-xs text-blue-600 font-medium">
+                On chart — click to remove
+              </div>
+            ) : (
+              <div className="text-xs text-gray-400 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+                Click to add to chart
+              </div>
+            )
           )}
         </div>
       </CardContent>

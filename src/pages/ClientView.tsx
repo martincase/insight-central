@@ -19,6 +19,7 @@ import { DateFilterSelector } from '@/components/dashboard/DateFilterSelector';
 import { SalesHeatmap } from '@/components/dashboard/SalesHeatmap';
 import { MetricsGrid } from '@/components/dashboard/MetricsGrid';
 import { MonthlyPerformanceView } from '@/components/dashboard/MonthlyPerformanceView';
+import { useChartMetrics } from '@/hooks/useChartMetrics';
 import { MonthlyPerformanceTable } from '@/components/dashboard/MonthlyPerformanceTable';
 import { InventoryTable } from '@/components/dashboard/InventoryTable';
 import { ASINDataTable } from '@/components/dashboard/ASINDataTable';
@@ -70,7 +71,7 @@ const ClientView = () => {
   const [customDateRange, setCustomDateRange] = useState<{ from: Date; to: Date } | undefined>();
   const [isLoading, setIsLoading] = useState(true);
   const [isDataLoading, setIsDataLoading] = useState(true);
-  const [selectedChartMetrics, setSelectedChartMetrics] = useState<string[]>(['sales', 'ppcSales']);
+  const { selectedChartMetrics, toggleChartMetric } = useChartMetrics();
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ClientTab>('performance');
   const [adType, setAdType] = useState<AdType>('all');
@@ -274,14 +275,6 @@ const ClientView = () => {
       : getCurrentDateRange(dateFilter, customDateRange);
     return detectMissingDates(dataSource, account.merchantToken, dateRange);
   }, [rawAsinData, rawVendorData, account, dateFilter, customDateRange, clientASINStaleInfo]);
-
-  const toggleChartMetric = (metricKey: string) => {
-    setSelectedChartMetrics(prev => 
-      prev.includes(metricKey) 
-        ? prev.filter(m => m !== metricKey)
-        : [...prev, metricKey]
-    );
-  };
 
   const handleDateFilterChange = (value: DateFilter) => {
     setDateFilter(value);
