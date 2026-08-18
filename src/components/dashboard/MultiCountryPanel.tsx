@@ -557,6 +557,15 @@ export function MultiCountryPanel({ spid, scope, dateFilter, customDateRange }: 
         const uncoveredMarkets = Array.from(salesByCountry.keys()).filter((cc) => !spendCountries.has(cc));
         const coversEveryMarket = uncoveredMarkets.length === 0;
         const coveredNames = Array.from(spendCountries).map((cc) => getCountryName(cc));
+        // The ads feed is grained by marketplace only — rpc_ppc_summary groups on
+        // country_code and carries no arm. So when an ads-covered market holds BOTH
+        // a vendor and a seller arm, that market's whole sales figure lands in the
+        // denominator even if the campaigns only ever ran on one of them. Portwest:
+        // £187 of seller spend is divided by £246,168 of GB vendor + seller sales.
+        // The ratio is then a floor, not a rate, and the caption has to say so.
+        const coveredMarketSpansArms = Array.from(spendCountries).some(
+          (cc) => new Set(sales.filter((r) => r.country_code === cc && r.arm).map((r) => r.arm)).size > 1,
+        );
         // Two names fit on a card face; beyond that the count is the readable
         // form and the full list goes in the line underneath.
         const coveredLabel =
@@ -663,6 +672,13 @@ export function MultiCountryPanel({ spid, scope, dateFilter, customDateRange }: 
                   . ACOS is ad spend ÷ ad sales, both taken from the advertising feed and converted at the
                   same rate.
                 </p>
+                {coveredMarketSpansArms && (
+                  <p className="text-[11px] text-muted-foreground">
+                    The advertising feed records spend by marketplace but not by vendor/seller arm, so a
+                    market's whole sales figure sits in the denominator even where the advertising only
+                    ran on one arm. Read TACOS here as the lowest it could be, not a precise rate.
+                  </p>
+                )}
                 {anyMissing && (
                   <p className="text-[11px] text-muted-foreground">
                     ACOS needs advertised-sales data, which is not synced for every marketplace. Where it
