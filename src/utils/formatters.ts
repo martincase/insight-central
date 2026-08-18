@@ -1,5 +1,10 @@
 
-import { getCurrencyInfo, getCurrencyFromMerchantToken, type CurrencyInfo } from './currencyUtils';
+import {
+  getCurrencyInfo,
+  getCurrencyInfoByCode,
+  getCurrencyFromMerchantToken,
+  type CurrencyInfo,
+} from './currencyUtils';
 
 /** Money is shown to two decimals or to none — never to one. */
 export type MoneyDecimals = 0 | 2;
@@ -68,6 +73,25 @@ export const formatCurrency = (amount: number, includeSymbol: boolean = true): s
 export const formatCurrencyByCountry = (amount: number, countryCode: string | null, includeSymbol: boolean = true): string => {
   if (!includeSymbol) return compact(amount);
   return formatMoney(amount, getCurrencyInfo(countryCode));
+};
+
+/**
+ * Format currency from the ISO 4217 code the row itself carries.
+ *
+ * Prefer this over formatCurrencyByCountry wherever the query returns a
+ * `currency` column: a country code has to be mapped to a currency before it
+ * can be printed, and an unmapped market falls through to GBP, which is how
+ * euro revenue reached a client under a £ sign. `countryCode` is passed only so
+ * the market keeps its own digit grouping; it cannot change the currency.
+ */
+export const formatCurrencyByCode = (
+  amount: number,
+  currencyCode: string | null | undefined,
+  countryCode?: string | null,
+  includeSymbol: boolean = true,
+): string => {
+  if (!includeSymbol) return compact(amount);
+  return formatMoney(amount, getCurrencyInfoByCode(currencyCode, countryCode));
 };
 
 /**

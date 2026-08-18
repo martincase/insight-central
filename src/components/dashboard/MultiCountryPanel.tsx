@@ -4,13 +4,14 @@ import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { formatCurrencyByCountry } from '@/utils/formatters';
-import { getCountryName } from '@/utils/countryUtils';
+import { formatCurrencyByCode } from '@/utils/formatters';
+import { getCountryName, getCountryFromMerchantToken } from '@/utils/countryUtils';
+import { ageInDays, STOCK_SNAPSHOT_STALE_DAYS } from '@/utils/stockDataQuality';
 import { CountryFlag } from './CountryFlag';
 import { CountryScope } from './CountrySwitcher';
 import { DateFilter } from '@/types/dashboard';
 import { getCurrentDateRange } from '@/utils/dataProcessor';
-import { Package, TrendingUp, DollarSign, ShoppingCart, Info, Megaphone, ChevronRight, ChevronDown, Loader2 } from 'lucide-react';
+import { Package, TrendingUp, DollarSign, ShoppingCart, Info, Megaphone, ChevronRight, ChevronDown, Loader2, AlertTriangle } from 'lucide-react';
 import { isRollupScope, scopeArea, scopeArm } from '@/utils/scope';
 
 
@@ -127,6 +128,31 @@ export function MultiCountryPanel({ spid, scope, dateFilter, customDateRange }: 
     };
   }, [spid, scope, pStart, pEnd]);
 
+  // Resolve each pool's merchant token to its account name, so the table can
+  // name the account instead of printing the token. Best-effort on purpose: if
+  // the lookup is not readable the row still has a country label to fall back on.
+  const [poolAccountNames, setPoolAccountNames] = useState<Record<string, string>>({});
+  useEffect(() => {
+    const tokens = inventory.map((r) => r.pool_key).filter(Boolean);
+    if (tokens.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from('accounts_master')
+        .select('merchant_token, account_name')
+        .in('merchant_token', tokens);
+      if (cancelled || !data) return;
+      const map: Record<string, string> = {};
+      for (const a of data as { merchant_token: string; account_name: string }[]) {
+        if (a.merchant_token && a.account_name) map[a.merchant_token] = a.account_name;
+      }
+      setPoolAccountNames(map);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [inventory]);
+
   const isRollup = isRollupScope(scope);
   const totalUnits = sales.reduce((s, r) => s + Number(r.units || 0), 0);
   const totalGbp = sales.reduce((s, r) => s + Number(r.sales_gbp || 0), 0);
@@ -137,6 +163,30 @@ export function MultiCountryPanel({ spid, scope, dateFilter, customDateRange }: 
   const marketCount = new Set(sales.map((r) => r.country_code)).size;
   const rowLabel = (r: SalesRow) =>
     `${getCountryName(r.country_code)}${splitByArm && r.arm ? ` · ${r.arm}` : ''}`;
+
+  /**
+   * A client must never be shown a merchant token. `pool_key` IS the token —
+   * Portwest's US pool printed as "A3R7FAYWFJZ8JU-US" — so the country it ends
+   * in names the pool, and the marketplaces it serves are already in the next
+   * column. The account name (below) disambiguates two pools in one country.
+   */
+  const poolLabel = (r: InventoryRow) => {
+    const cc = getCountryFromMerchantToken(r.pool_key);
+    return cc ? `${getCountryName(cc)} (FBA pool)` : 'FBA pool';
+  };
+
+  /**
+   * A snapshot older than the shared threshold is not today's stock position.
+   * Portwest's US pool read "23 Jul 2026" beside GB's "18 Aug" — 26 days behind,
+   * with nothing on screen saying so. Same rule and same constant the stock
+   * panels already use, so a pool cannot be stale here and fresh there.
+   */
+  const poolAge = (r: InventoryRow) => ageInDays(r.record_date);
+  const isPoolStale = (r: InventoryRow) => {
+    const age = poolAge(r);
+    return age !== null && age > STOCK_SNAPSHOT_STALE_DAYS;
+  };
+  const stalePools = inventory.filter(isPoolStale).length;
 
   const togglePool = async (poolKey: string) => {
     const next = new Set(expandedPools);
@@ -203,7 +253,11 @@ export function MultiCountryPanel({ spid, scope, dateFilter, customDateRange }: 
             ) : (
               <div className="text-lg md:text-2xl font-bold mt-1">
                 {singleRow
-                  ? formatCurrencyByCountry(Number(singleRow.sales_native || 0), singleRow.country_code)
+                  ? formatCurrencyByCode(
+                      Number(singleRow.sales_native || 0),
+                      singleRow.currency,
+                      singleRow.country_code,
+                    )
                   : fmtGbp(totalGbp)}
               </div>
             )}
@@ -269,7 +323,9 @@ export function MultiCountryPanel({ spid, scope, dateFilter, customDateRange }: 
                           </TableCell>
                           <TableCell className="text-right">{fmtInt(Number(r.units || 0))}</TableCell>
                           <TableCell className="text-right">
-                            {formatCurrencyByCountry(Number(r.sales_native || 0), r.country_code)}
+                            {/* Symbol from the row's own ISO currency, never from
+                                its country code — see formatCurrencyByCode. */}
+                            {formatCurrencyByCode(Number(r.sales_native || 0), r.currency, r.country_code)}
                           </TableCell>
                           <TableCell className="text-right">{fmtGbp(Number(r.sales_gbp || 0))}</TableCell>
                         </TableRow>
@@ -304,6 +360,25 @@ export function MultiCountryPanel({ spid, scope, dateFilter, customDateRange }: 
           ) : inventory.length === 0 ? (
             <div className="text-sm text-muted-foreground py-4 text-center">No inventory data.</div>
           ) : (
+            <>
+            {/* Pools are snapshotted independently, so one can freeze while the
+                rest keep updating. An out-of-date pool must say so rather than
+                sit beside a current one looking equally true. */}
+            {stalePools > 0 && (
+              <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 px-3 py-2 text-xs text-amber-900 dark:text-amber-300 flex items-start gap-2">
+                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                <span>
+                  <strong>
+                    {stalePools === 1
+                      ? 'One pool’s snapshot is out of date.'
+                      : `${stalePools} pools’ snapshots are out of date.`}
+                  </strong>{' '}
+                  Amazon last reported {stalePools === 1 ? 'it' : 'them'} more than{' '}
+                  {STOCK_SNAPSHOT_STALE_DAYS} days ago, so those quantities are frozen at the date shown
+                  in the “As of” column and do not describe today’s stock position.
+                </span>
+              </div>
+            )}
             <Table>
               <TableHeader>
                 <TableRow>
@@ -323,6 +398,9 @@ export function MultiCountryPanel({ spid, scope, dateFilter, customDateRange }: 
                   const expanded = expandedPools.has(r.pool_key);
                   const skus = poolSkus[r.pool_key];
                   const isPoolLoading = poolLoading.has(r.pool_key);
+                  const accountName = poolAccountNames[r.pool_key];
+                  const stale = isPoolStale(r);
+                  const age = poolAge(r);
                   return (
                     <Fragment key={r.pool_key}>
                       <TableRow
@@ -332,7 +410,12 @@ export function MultiCountryPanel({ spid, scope, dateFilter, customDateRange }: 
                         <TableCell className="w-6">
                           {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                         </TableCell>
-                        <TableCell className="font-medium">{r.pool_key}</TableCell>
+                        <TableCell className="font-medium">
+                          {poolLabel(r)}
+                          {accountName && (
+                            <div className="text-[10px] font-normal text-muted-foreground">{accountName}</div>
+                          )}
+                        </TableCell>
                         <TableCell className="text-xs text-muted-foreground">{r.countries}</TableCell>
                         <TableCell className="text-right">
                           {fmtInt(Number(r.fulfillable_skus || 0))} <span className="text-muted-foreground">/ {fmtInt(Number(r.skus || 0))}</span>
@@ -341,8 +424,25 @@ export function MultiCountryPanel({ spid, scope, dateFilter, customDateRange }: 
                         <TableCell className="text-right">{fmtInt(Number(r.inbound || 0))}</TableCell>
                         <TableCell className="text-right">{fmtInt(Number(r.reserved || 0))}</TableCell>
                         <TableCell className="text-right font-semibold">{fmtInt(Number(r.total || 0))}</TableCell>
-                        <TableCell className="text-right text-xs text-muted-foreground">
-                          {r.record_date ? format(new Date(r.record_date), 'dd MMM yyyy') : '—'}
+                        <TableCell
+                          className={`text-right text-xs ${stale ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'}`}
+                        >
+                          {r.record_date ? (
+                            <span
+                              className="inline-flex items-center justify-end gap-1"
+                              title={
+                                stale
+                                  ? `Snapshot is ${age} days old — these quantities are frozen at ${format(new Date(r.record_date), 'dd MMM yyyy')}.`
+                                  : undefined
+                              }
+                            >
+                              {stale && <AlertTriangle className="h-3 w-3 shrink-0" />}
+                              {format(new Date(r.record_date), 'dd MMM yyyy')}
+                              {stale && <span className="whitespace-nowrap">({age}d old)</span>}
+                            </span>
+                          ) : (
+                            '—'
+                          )}
                         </TableCell>
                       </TableRow>
                       {expanded && (
@@ -395,6 +495,7 @@ export function MultiCountryPanel({ spid, scope, dateFilter, customDateRange }: 
                 })}
               </TableBody>
             </Table>
+            </>
           )}
         </CardContent>
       </Card>
@@ -436,11 +537,42 @@ export function MultiCountryPanel({ spid, scope, dateFilter, customDateRange }: 
         // The card is the column total of the table beneath it. Both ratios are
         // rebuilt from the same two sums, over the same rows, so no reading on
         // this card can contradict a reading in that table.
-        const blendedTacos = totalGbp > 0 ? totalSpend / totalGbp : null;
+        //
+        // TACOS must divide by the sales the ads could actually influence, not
+        // by every market on the panel. Portwest advertises in one of twelve:
+        // £187 of spend over £454,050 of group-wide sales printed "<0.1%", which
+        // reads as "advertising is free". Over the £10,416 the ads feed covers
+        // it is 1.8% — the same money, honestly denominated. So the denominator
+        // is the sales of the countries that carry ad spend, and the label names
+        // them whenever that is short of the whole panel.
+        const spendCountries = new Set(
+          ppc.filter((r) => Number(r.ad_spend_gbp || 0) > 0).map((r) => r.country_code),
+        );
+        const coveredSales = Array.from(spendCountries).reduce(
+          (s, cc) => s + (salesByCountry.get(cc) || 0),
+          0,
+        );
+        // Set membership, not a count: a country can carry ad spend without
+        // appearing in the sales rows, and that must not read as full coverage.
+        const uncoveredMarkets = Array.from(salesByCountry.keys()).filter((cc) => !spendCountries.has(cc));
+        const coversEveryMarket = uncoveredMarkets.length === 0;
+        const coveredNames = Array.from(spendCountries).map((cc) => getCountryName(cc));
+        // Two names fit on a card face; beyond that the count is the readable
+        // form and the full list goes in the line underneath.
+        const coveredLabel =
+          coveredNames.length <= 2 ? coveredNames.join(' + ') : `${coveredNames.length} markets`;
+        const tacosTitle = coversEveryMarket
+          ? 'Blended TACOS'
+          : `TACOS (ads-covered markets: ${coveredLabel})`;
+        const coveredTacos = coveredSales > 0 ? totalSpend / coveredSales : null;
+
+        // NOT "blended" — blended conventionally means over total sales, and
+        // this is spend ÷ ad sales, i.e. plain ACOS over the markets whose
+        // advertised sales are synced. The maths was right; the name was not.
         const perfRows = ppc.filter((r) => r.has_ads_perf && Number(r.ad_sales_gbp || 0) > 0);
         const perfSpend = perfRows.reduce((s, r) => s + Number(r.ad_spend_gbp || 0), 0);
         const perfAdSales = perfRows.reduce((s, r) => s + Number(r.ad_sales_gbp || 0), 0);
-        const blendedAcos = perfAdSales > 0 ? perfSpend / perfAdSales : null;
+        const coveredAcos = perfAdSales > 0 ? perfSpend / perfAdSales : null;
         const anyMissing = ppc.some((r) => !r.has_ads_perf);
         const anyFromFinancials = ppc.some((r) => r.ad_spend_source !== 'ads_feed');
         const partialAcosBase = perfRows.length > 0 && perfRows.length < ppc.length;
@@ -458,17 +590,18 @@ export function MultiCountryPanel({ spid, scope, dateFilter, customDateRange }: 
                   <div className="text-lg md:text-2xl font-bold mt-1">{fmtGbp(totalSpend)}</div>
                 </div>
                 <div className="rounded-md border p-3">
-                  <div className="text-xs text-muted-foreground">Blended TACOS</div>
-                  <div className="text-lg md:text-2xl font-bold mt-1">{pct(blendedTacos)}</div>
-                  <div className="text-[10px] text-muted-foreground mt-0.5">
-                    {fmtGbp(totalSpend)} ÷ {fmtGbp(totalGbp)} total sales
+                  <div className="text-xs text-muted-foreground">{tacosTitle}</div>
+                  <div className="text-lg md:text-2xl font-bold mt-1">{pct(coveredTacos)}</div>
+                  <div className="text-[10px] text-muted-foreground mt-0.5" title={coveredNames.join(', ')}>
+                    {fmtGbp(totalSpend)} ÷ {fmtGbp(coveredSales)} sales in{' '}
+                    {coversEveryMarket ? 'all markets' : coveredLabel}
                   </div>
                 </div>
                 <div className="rounded-md border p-3">
-                  <div className="text-xs text-muted-foreground">Blended ACOS</div>
-                  <div className="text-lg md:text-2xl font-bold mt-1">{pct(blendedAcos)}</div>
+                  <div className="text-xs text-muted-foreground">ACOS (ads-covered markets)</div>
+                  <div className="text-lg md:text-2xl font-bold mt-1">{pct(coveredAcos)}</div>
                   <div className="text-[10px] text-muted-foreground mt-0.5">
-                    {blendedAcos == null
+                    {coveredAcos == null
                       ? 'No advertised sales synced'
                       : `${fmtGbp(perfSpend)} ÷ ${fmtGbp(perfAdSales)} ad sales`}
                   </div>
@@ -511,26 +644,30 @@ export function MultiCountryPanel({ spid, scope, dateFilter, customDateRange }: 
                   <TableRow className="font-semibold bg-muted/40">
                     <TableCell>Total</TableCell>
                     <TableCell className="text-right tabular-nums">{fmtGbp(totalSpend)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{pct(blendedTacos)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{pct(coveredTacos)}</TableCell>
                     <TableCell className="text-right tabular-nums">
                       {perfAdSales > 0 ? fmtGbp(perfAdSales) : '—'}
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">{pct(blendedAcos)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{pct(coveredAcos)}</TableCell>
                   </TableRow>
                 </TableBody>
               </Table>
 
               <div className="space-y-1">
                 <p className="text-[11px] text-muted-foreground">
-                  TACOS is ad spend ÷ that country's sales from the table above; the Total row divides
-                  total ad spend by the {fmtGbp(totalGbp)} on the Sales card. ACOS is ad spend ÷ ad sales,
-                  both taken from the advertising feed and converted at the same rate.
+                  TACOS is ad spend ÷ that country's sales from the per-country table above. The Total row
+                  divides total ad spend by the {fmtGbp(coveredSales)} of sales in{' '}
+                  {coversEveryMarket
+                    ? `all ${marketCount} markets, which is the ${fmtGbp(totalGbp)} on the Sales card`
+                    : `the ${coveredNames.length === 1 ? 'market' : 'markets'} that carry ad spend (${coveredNames.join(', ')}) — not the ${fmtGbp(totalGbp)} on the Sales card, which also covers ${uncoveredMarkets.length} ${uncoveredMarkets.length === 1 ? 'market' : 'markets'} this advertising does not reach`}
+                  . ACOS is ad spend ÷ ad sales, both taken from the advertising feed and converted at the
+                  same rate.
                 </p>
                 {anyMissing && (
                   <p className="text-[11px] text-muted-foreground">
                     ACOS needs advertised-sales data, which is not synced for every marketplace. Where it
                     is missing the row shows '—' rather than a zero.
-                    {partialAcosBase && ' The blended ACOS covers only the marketplaces that have it.'}
+                    {partialAcosBase && ' The total ACOS covers only the marketplaces that have it.'}
                   </p>
                 )}
                 {anyFromFinancials && (

@@ -90,6 +90,64 @@ export function getCurrencyInfo(countryCode: string | null): CurrencyInfo {
 }
 
 /**
+ * Currency identity keyed by ISO 4217 code.
+ *
+ * Derived from COUNTRY_CURRENCY_MAP rather than typed out a second time, so a
+ * currency can never be described one way here and another way there. The first
+ * country listed for a currency supplies its canonical locale, which governs
+ * digit grouping only — the symbol is the same whichever market it came from.
+ */
+const CURRENCY_BY_CODE: Record<string, CurrencyInfo> = Object.values(COUNTRY_CURRENCY_MAP).reduce(
+  (acc, info) => {
+    if (!acc[info.code]) acc[info.code] = info;
+    return acc;
+  },
+  {} as Record<string, CurrencyInfo>,
+);
+
+/**
+ * Get currency info from the ISO 4217 code the feed itself reports.
+ *
+ * Formatting off a country code is the bug class that put Portwest's Belgian
+ * and Irish euros in front of a client under a £ sign: an unmapped marketplace
+ * did not look broken, it silently became sterling. A currency code cannot do
+ * that, because it names the currency outright — so every call site that has a
+ * real `currency` column should come through here instead of getCurrencyInfo.
+ *
+ * `countryCode` is an optional tie-break on LOCALE only: where the market's own
+ * entry agrees with the reported currency we keep its grouping (fr-FR for
+ * France's euros), so existing per-market styling is unchanged. It can never
+ * override the currency. An unrecognised code prints as the code rather than
+ * borrowing some other currency's symbol.
+ */
+export function getCurrencyInfoByCode(
+  currencyCode: string | null | undefined,
+  countryCode?: string | null,
+): CurrencyInfo {
+  // No currency on the row at all — fall back to the country map, which at
+  // least warns in dev when it is guessing.
+  if (!currencyCode) return getCurrencyInfo(countryCode ?? null);
+
+  const code = currencyCode.toUpperCase();
+
+  if (countryCode) {
+    const local = COUNTRY_CURRENCY_MAP[countryCode.split('#')[0].toUpperCase()];
+    if (local && local.code === code) return local;
+  }
+
+  const hit = CURRENCY_BY_CODE[code];
+  if (hit) return hit;
+
+  if (import.meta.env.DEV) {
+    console.warn(
+      `[currencyUtils] No symbol mapped for currency "${code}" — printing the code itself. ` +
+        `Add it to COUNTRY_CURRENCY_MAP before this reaches a client dashboard.`,
+    );
+  }
+  return { code, symbol: `${code} `, locale: 'en-GB', name: code };
+}
+
+/**
  * Get currency info from merchant token
  */
 export function getCurrencyFromMerchantToken(merchantToken: string): CurrencyInfo {

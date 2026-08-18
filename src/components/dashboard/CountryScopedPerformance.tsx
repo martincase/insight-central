@@ -10,7 +10,7 @@ import { ExternalLink, ChevronDown, ChevronUp } from 'lucide-react';
 import { CountryScope } from './CountrySwitcher';
 import { isRollupScope, scopeArea, scopeArm, scopeCountryCode } from '@/utils/scope';
 import { MetricsCard } from './MetricsCard';
-import { getCurrencyInfo } from '@/utils/currencyUtils';
+import { getCurrencyInfo, getCurrencyInfoByCode } from '@/utils/currencyUtils';
 import { getCountryName } from '@/utils/countryUtils';
 import { getAmazonProductUrl } from '@/utils/amazonUtils';
 import { getCurrentDateRange, getPreviousDateRange } from '@/utils/dataProcessor';
@@ -78,7 +78,16 @@ export function CountryScopedPerformance({
     ? `Partial period — ${completeness.presentDays} of ${completeness.expectedDays} days`
     : undefined;
 
-  const cur = getCurrencyInfo(scope);
+  // The symbol follows the currency the feed reported, not a country code
+  // guessed off the scope token. `totals.sales` is native only while the scope
+  // resolves to ONE currency; the moment it spans two the hook hands back GBP
+  // and says so by returning a null currency (see ScopedTotals). Mapping the
+  // scope's country instead is the bug class that printed Portwest's Belgian
+  // euros under a £ sign — an unmapped market did not look broken, it looked
+  // like pounds. The scope map is used only while totals are still loading.
+  const cur = totals
+    ? getCurrencyInfoByCode(totals.currency ?? 'GBP')
+    : getCurrencyInfo(scope);
   const isRollup = isRollupScope(scope);
 
   const fmtMoney = (v: number) =>
@@ -205,9 +214,12 @@ export function CountryScopedPerformance({
    * `metric` is the scale's identifier for the row, not the on-screen label — the
    * label changes with the account arm ("Conversion % (seller arm)"), and the
    * inversion hook must not depend on wording. Nothing here is an inverse metric
-   * today (ads are not split by marketplace, so ACOS/TACOS cannot be built at
-   * country level); the hook is wired so that a cost row added later inverts on
-   * its own instead of quietly rendering upside down.
+   * today — this grid is built from rpc_metrics_daily_country, which carries no
+   * ads columns, so ACOS/TACOS are not among these rows. (They ARE available per
+   * country: amazon_api_campaigns_performance carries country_code and
+   * rpc_ppc_summary groups on it, which is what the Advertising panel shows.)
+   * The hook is wired so that a cost row added later inverts on its own instead
+   * of quietly rendering upside down.
    *
    * `has` is per-day, aligned with `days`: false means nothing was reported, and
    * the cell hatches. It is NOT `value > 0` — a day that genuinely sold nothing
@@ -308,7 +320,7 @@ export function CountryScopedPerformance({
         <div className="mb-3 md:mb-4">
           <h2 className="text-base md:text-xl font-semibold text-foreground">Daily Performance</h2>
           <p className="text-xs md:text-sm text-muted-foreground hidden sm:block">
-            Daily sales, units, page views, buy box % and conversion for {scopeLabel(scope)}. PPC, ACOS and TACOS are not available at country level (ads aren't split by marketplace).
+            Daily sales, units, page views, buy box % and conversion for {scopeLabel(scope)}. Advertising is not part of these figures — PPC, ACOS and TACOS are reported, split by country, in the Advertising panel.
           </p>
         </div>
         <Card>
@@ -385,7 +397,7 @@ export function CountryScopedPerformance({
         <div className="mb-3 md:mb-4">
           <h2 className="text-base md:text-xl font-semibold text-foreground">Key Metrics</h2>
           <p className="text-xs md:text-sm text-muted-foreground hidden sm:block">
-            Sales, units, page views, buy box and conversion for {scopeLabel(scope)}. PPC, ACOS and TACOS are not available at country level (ads aren't split by marketplace).
+            Sales, units, page views, buy box and conversion for {scopeLabel(scope)}. Advertising is not part of these figures — PPC, ACOS and TACOS are reported, split by country, in the Advertising panel.
           </p>
         </div>
         {loading ? (
