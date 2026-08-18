@@ -291,31 +291,67 @@ export const MetricsGrid = ({
   // when the sales side is materially incomplete — dividing a whole month of ad
   // spend into two days of revenue is what produced Lockabox's 109.3%.
   //
-  // And withheld, for exactly the same reason, whenever the SALES window has
-  // been cut back to the days that have landed while the ADVERTISING window has
-  // not. The ads feed has no such lag, so on Portwest this ratio would put
-  // fourteen days of spend over twelve days of revenue and overstate TACOS by
-  // about a sixth. Truncating the ads side to match is the proper fix, but the
-  // previous period's advertising arrives here already summed, with no daily
-  // series to cut — so there is no honest denominator to build, and a ratio with
-  // no honest denominator is not printed.
+  // The same exposure applies whenever the SALES window has been cut back to the
+  // days that have landed while the ADVERTISING window has not: the ads feed has
+  // no such lag, so the raw ratio would put fourteen days of spend over twelve
+  // days of revenue and overstate TACOS by about a sixth.
+  //
+  // The ads side CAN be cut to match, though — apiPpcDailyData is a daily series
+  // and carries the date. So rather than dropping the metric, sum spend and ad
+  // sales over the same days the sales figure covers and print the honest ratio.
+  //
+  // What cannot be rebuilt is the COMPARISON: the previous period's advertising
+  // arrives already summed, with no daily series to cut. So the value is shown
+  // and the delta is not — a client keeps the number they came for, and is told
+  // plainly why there is nothing to compare it against. Withholding both, which
+  // is what happened before, cost every seller account its TACOS every single
+  // day, because there is nearly always one trailing day still landing.
   const windowsMismatched = !!scopedMetrics && scopedMetrics.truncation.trimmedDays > 0;
-  const blendedRatiosOk = adsAvailable && !salesIncomplete && !windowsMismatched;
+
+  /** Ad spend and ad sales summed over only the days the sales figure covers. */
+  const adsCutToSalesWindow = useMemo(() => {
+    if (!windowsMismatched || !apiPpcDailyData?.length) return null;
+    const cutoff = scopedMetrics!.effectiveRange.to;
+    const cutoffKey = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, '0')}-${String(cutoff.getDate()).padStart(2, '0')}`;
+    const inWindow = apiPpcDailyData.filter((r) => r.date <= cutoffKey);
+    // No rows at or before the cutoff means the series cannot be cut to match,
+    // so there is still no honest denominator and the metric stays withheld.
+    if (!inWindow.length) return null;
+    return {
+      spend: inWindow.reduce((sum, r) => sum + (Number(r.spend) || 0), 0),
+      sales: inWindow.reduce((sum, r) => sum + (Number(r.sales) || 0), 0),
+    };
+  }, [windowsMismatched, apiPpcDailyData, scopedMetrics]);
+
+  const canRebuildBlended = !!adsCutToSalesWindow;
+  const blendedRatiosOk = adsAvailable && !salesIncomplete && (!windowsMismatched || canRebuildBlended);
   /** Why TACOS and Advertising % are blank, said on the card rather than left as '—'. */
   const blendedWithheldNote = salesIncomplete
     ? incompleteNote
-    : windowsMismatched
+    : windowsMismatched && !canRebuildBlended
       ? `Withheld — sales cover ${scopedMetrics!.truncation.completeDays} complete days, advertising covers the full period`
       : undefined;
-  const tacos = blendedRatiosOk ? ratio(ppcSpend, totalMetrics.sales, 100) : null;
-  const prevTacos = blendedRatiosOk ? ratio(prevPpcSpend, totalPreviousMetrics.sales, 100) : null;
+  /** Said on the card when the value is real but has nothing to be compared with. */
+  const blendedNoComparisonNote =
+    windowsMismatched && canRebuildBlended
+      ? `Over the ${scopedMetrics!.truncation.completeDays} complete days only. No comparison — the previous period's advertising cannot be cut to the same days.`
+      : undefined;
+
+  const blendedSpend = adsCutToSalesWindow ? adsCutToSalesWindow.spend : ppcSpend;
+  const blendedPpcSales = adsCutToSalesWindow ? adsCutToSalesWindow.sales : ppcSales;
+
+  const tacos = blendedRatiosOk ? ratio(blendedSpend, totalMetrics.sales, 100) : null;
+  // Deliberately null while the windows are mismatched: see above.
+  const prevTacos =
+    blendedRatiosOk && !windowsMismatched ? ratio(prevPpcSpend, totalPreviousMetrics.sales, 100) : null;
 
   // Advertising reliance — PPC sales as a share of total sales. Same exposure
   // to a half-reported sales series, same treatment.
-  const advertisingReliance = blendedRatiosOk ? ratio(ppcSales, totalMetrics.sales, 100) : null;
-  const prevAdvertisingReliance = blendedRatiosOk
-    ? ratio(prevPpcSales, totalPreviousMetrics.sales, 100)
-    : null;
+  const advertisingReliance = blendedRatiosOk ? ratio(blendedPpcSales, totalMetrics.sales, 100) : null;
+  const prevAdvertisingReliance =
+    blendedRatiosOk && !windowsMismatched
+      ? ratio(prevPpcSales, totalPreviousMetrics.sales, 100)
+      : null;
 
   // Organic metrics - prefer direct computation
   const fallbackBuyBoxPercentage = directOrganicMetrics ? directOrganicMetrics.buyBoxPercentage
@@ -744,7 +780,7 @@ export const MetricsGrid = ({
               isPercentage={true}
               onClick={chartToggleFor('tacos')}
               isSelected={chartSelected('tacos')}
-              comparisonSuppressedReason={blendedWithheldNote}
+              comparisonSuppressedReason={blendedWithheldNote ?? blendedNoComparisonNote}
             />
 
             <MetricsCard
@@ -760,7 +796,7 @@ export const MetricsGrid = ({
               isPercentage={true}
               onClick={chartToggleFor('advertisingReliance')}
               isSelected={chartSelected('advertisingReliance')}
-              comparisonSuppressedReason={blendedWithheldNote}
+              comparisonSuppressedReason={blendedWithheldNote ?? blendedNoComparisonNote}
             />
 
 
