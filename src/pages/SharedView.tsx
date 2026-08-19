@@ -743,11 +743,30 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
               setLoadingProgress(prev => ({ ...prev, inventory: false }));
             });
 
+        // How far back the ASIN-grain vendor fetch has to reach: the selected
+        // window, plus the feed lag, clamped so an unusual filter can neither
+        // request one day nor a whole year of per-ASIN rows.
+        const vendorWindow = dateFilter === 'custom' && customDateRange
+          ? customDateRange
+          : getCurrentDateRange(dateFilter);
+        const vendorLookbackDays = Math.min(
+          120,
+          Math.max(
+            14,
+            Math.ceil((Date.now() - new Date(vendorWindow.from).getTime()) / 86400000) + 4,
+          ),
+        );
+
         // ── ASIN + Vendor Supabase (these are the slow ones) ──
         const asinPromise = (ASIN_FEATURE_ENABLED
           ? Promise.all([
               fetchWithTimeout(fetchASINDataFromSupabase(acct.merchantToken), 30000).catch(err => { console.error('ASIN fetch failed:', err); return []; }),
-              fetchWithTimeout(fetchVendorDataFromSupabase(acct.merchantToken), 30000).catch(err => { console.error('Vendor Supabase failed:', err); return []; })
+              // 90 days of ASIN-grain vendor rows is ~200k records for Portwest and
+              // reliably blew the 30s timeout, which returned [] and left the vendor
+              // product tables empty. The tables only ever render the selected
+              // window, so fetch that window (plus a small margin for the vendor
+              // feed lag) instead of a fixed quarter.
+              fetchWithTimeout(fetchVendorDataFromSupabase(acct.merchantToken, vendorLookbackDays), 30000).catch(err => { console.error('Vendor Supabase failed:', err); return []; })
             ]).then(([asinDataFromSupabase, supabaseVendorValues]) => {
               const asinDataValues = Array.isArray(asinDataFromSupabase) ? asinDataFromSupabase : [];
               const vendorValues = Array.isArray(supabaseVendorValues) ? supabaseVendorValues : [];

@@ -274,15 +274,29 @@ const Index = () => {
         .catch((err) => console.error("Failed to fetch focused ASIN data:", err));
     }
 
-    // Fetch vendor data only for vendor accounts
+    // Fetch vendor data only for vendor accounts.
+    //
+    // The default reach is 90 days of ASIN-grain rows. For Portwest that is over
+    // 200,000 records paged a thousand at a time, which does not finish: the
+    // fetch fails, supabaseVendorData stays empty, and because the heatmap keys
+    // its cells on row presence, EVERY cell renders as hatched "not reported"
+    // while the KPI cards - fed from an aggregated source - still show figures.
+    // Bound it to the window actually on screen plus the vendor feed lag.
     if (isVendor) {
-      fetchVendorDataFromSupabase(focusedAcct.merchantToken)
+      const vendorWindow = dateFilter === 'custom' && customDateRange
+        ? customDateRange
+        : getCurrentDateRange(dateFilter);
+      const vendorLookbackDays = Math.min(
+        120,
+        Math.max(14, Math.ceil((Date.now() - new Date(vendorWindow.from).getTime()) / 86400000) + 4),
+      );
+      fetchVendorDataFromSupabase(focusedAcct.merchantToken, vendorLookbackDays)
         .then((rows) => {
           setSupabaseVendorData(rows);
         })
         .catch((err) => console.error("Failed to fetch focused vendor data:", err));
     }
-  }, [focusedAccountId, accounts]);
+  }, [focusedAccountId, accounts, dateFilter, customDateRange]);
 
   // Persist focus tab
   useEffect(() => {
