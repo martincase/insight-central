@@ -1472,20 +1472,6 @@ const Index = () => {
                     }
                   />
 
-                  {focusedBrandCountries.spid && (
-                    <SalesTrendCard
-                      spid={focusedBrandCountries.spid}
-                      scope={effectiveFocusedScope}
-                      dateFilter={dateFilter}
-                      customDateRange={customDateRange}
-                      primaryCountry={focusedBrandCountries.primary?.country_code}
-                      onDrilldown={(from, to) => {
-                        setDateFilter('custom');
-                        setCustomDateRange({ from, to });
-                      }}
-                    />
-                  )}
-
                   {focusedBrandCountries.isMultiCountry && focusedBrandCountries.spid && (
                     <div className="space-y-3">
                       <CountrySwitcher
@@ -1495,14 +1481,6 @@ const Index = () => {
                         arms={focusedBrandCountries.arms}
                         clientName={focusedBrandCountries.clientName}
                       />
-                      {isRollupScope(effectiveFocusedScope) && (
-                        <MultiCountryPanel
-                          spid={focusedBrandCountries.spid}
-                          scope={effectiveFocusedScope}
-                          dateFilter={dateFilter}
-                          customDateRange={customDateRange}
-                        />
-                      )}
                     </div>
                   )}
 
@@ -1630,6 +1608,32 @@ const Index = () => {
                       </div>
                     )}
                   </CollapsibleSection>
+
+                  {/* Sales trend and the multi-country breakdown sit BELOW the
+                      heatmap / KPIs / graph trio: those three are what a client
+                      is opening the dashboard to read, so they come first. */}
+                  {focusedBrandCountries.spid && (
+                    <SalesTrendCard
+                      spid={focusedBrandCountries.spid}
+                      scope={effectiveFocusedScope}
+                      dateFilter={dateFilter}
+                      customDateRange={customDateRange}
+                      primaryCountry={focusedBrandCountries.primary?.country_code}
+                      onDrilldown={(from, to) => {
+                        setDateFilter('custom');
+                        setCustomDateRange({ from, to });
+                      }}
+                    />
+                  )}
+
+                  {focusedBrandCountries.isMultiCountry && focusedBrandCountries.spid && isRollupScope(effectiveFocusedScope) && (
+                    <MultiCountryPanel
+                      spid={focusedBrandCountries.spid}
+                      scope={effectiveFocusedScope}
+                      dateFilter={dateFilter}
+                      customDateRange={customDateRange}
+                    />
+                  )}
 
                   {/* Add Change Marker Dialog */}
                   <AddChangeMarkerDialog

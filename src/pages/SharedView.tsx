@@ -1247,33 +1247,12 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
               }
             />
 
-            {brandCountries.spid && (
-              <SalesTrendCard
-                spid={brandCountries.spid}
-                scope={effectiveScope}
-                dateFilter={dateFilter}
-                customDateRange={customDateRange}
-                primaryCountry={brandCountries.primary?.country_code}
-                onDrilldown={(from, to) => {
-                  setDateFilter('custom');
-                  setCustomDateRange({ from, to });
-                }}
-              />
-            )}
 
 
 
 
 
 
-            {brandCountries.isMultiCountry && brandCountries.spid && isRollupScope(effectiveScope) && (
-              <MultiCountryPanel
-                spid={brandCountries.spid}
-                scope={effectiveScope}
-                dateFilter={dateFilter}
-                customDateRange={customDateRange}
-              />
-            )}
 
 
 
@@ -1463,6 +1442,32 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
                 </>
               );
             })()}
+
+            {/* Sales trend and the multi-country breakdown sit BELOW the heatmap /
+                KPIs / graph trio. Those three answer "how are we doing" and are what a
+                client opens the link to read, so nothing goes above them. */}
+            {brandCountries.spid && (
+              <SalesTrendCard
+                spid={brandCountries.spid}
+                scope={effectiveScope}
+                dateFilter={dateFilter}
+                customDateRange={customDateRange}
+                primaryCountry={brandCountries.primary?.country_code}
+                onDrilldown={(from, to) => {
+                  setDateFilter('custom');
+                  setCustomDateRange({ from, to });
+                }}
+              />
+            )}
+
+            {brandCountries.isMultiCountry && brandCountries.spid && isRollupScope(effectiveScope) && (
+              <MultiCountryPanel
+                spid={brandCountries.spid}
+                scope={effectiveScope}
+                dateFilter={dateFilter}
+                customDateRange={customDateRange}
+              />
+            )}
 
             {/* Stock & Inventory */}
             <section>
