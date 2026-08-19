@@ -753,7 +753,10 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
           120,
           Math.max(
             14,
-            Math.ceil((Date.now() - new Date(vendorWindow.from).getTime()) / 86400000) + 4,
+            // Doubled: processASINData builds a PREVIOUS period as well as the
+          // current one, so a 14-day selection needs 28 days of rows on hand or
+          // every comparison column silently reads "no change".
+          Math.ceil((Date.now() - new Date(vendorWindow.from).getTime()) / 86400000) * 2 + 4,
           ),
         );
 
