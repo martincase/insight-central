@@ -204,36 +204,44 @@ async function fetchSdData(profileId: number, startDate: string, endDate: string
 }
 
 async function fetchVendorData(merchantToken: string, startDate: string, endDate: string): Promise<ApiPpcDailyRow[]> {
-  const rows: ApiPpcDailyRow[] = [];
-  let from = 0;
-  const batchSize = 1000;
-  while (true) {
-    const { data, error } = await supabase
-      .from('vw_daily_vendor_data')
-      .select('record_date, sales, units_ordered, page_views, buy_box_percentage')
-      .eq('merchant_token', merchantToken)
-      .gte('record_date', startDate)
-      .lte('record_date', endDate)
-      .range(from, from + batchSize - 1);
-    if (error) { console.error('Vendor fetch error:', error); break; }
-    if (!data || data.length === 0) break;
-    for (const r of data) {
-      rows.push({
-        date: r.record_date,
-        impressions: 0,
-        clicks: 0,
-        spend: 0,
-        sales: Number(r.sales) || 0,
-        orders: Number(r.units_ordered) || 0,
-        pageViews: Number(r.page_views) || 0,
-        buyBoxPercentage: Number(r.buy_box_percentage) || 0,
-        unitsOrdered: Number(r.units_ordered) || 0,
-      });
-    }
-    if (data.length < batchSize) break;
-    from += batchSize;
-  }
-  return rows;
+  // This used to page vw_daily_vendor_data a thousand rows at a time. That view is
+  // ASIN-grain: Portwest has ~2.5M rows in it and ~44k inside a fortnight, so the
+  // 70-day floor above meant 113 sequential requests on a single page load, ~28s,
+  // and frequently a statement timeout (57014). The loop then did `break` on error
+  // and returned a partial or empty array WITHOUT setting any error state, so a
+  // broken fetch was indistinguishable from a vendor with no sales: KPI cards read
+  // zero and every heatmap cell rendered as hatched "not reported".
+  //
+  // rpc_vendor_daily_totals rolls the ASIN rows to one row per day inside the
+  // database, filtering on (selling_partner_id, marketplace_id, record_date) before
+  // it aggregates so the index is actually used. Same 70-day window: one request,
+  // ~70 rows, ~170ms. Nothing downstream ever wanted ASIN grain — it summed straight
+  // back to days.
+  const { data, error } = await supabase.rpc('rpc_vendor_daily_totals' as any, {
+    p_merchant_token: merchantToken,
+    p_start: startDate,
+    p_end: endDate,
+  });
+
+  // Deliberately thrown, not swallowed. The caller sets `error` on the hook, which
+  // is what lets the UI say "we could not load this" instead of quietly drawing a
+  // dashboard full of zeros.
+  if (error) throw error;
+
+  return ((data ?? []) as any[]).map((r) => {
+    const units = Number(r.units) || 0;
+    return {
+      date: String(r.record_date),
+      impressions: 0,
+      clicks: 0,
+      spend: 0,
+      sales: Number(r.sales) || 0,
+      orders: units,
+      pageViews: Number(r.glance_views) || 0,
+      buyBoxPercentage: 0,
+      unitsOrdered: units,
+    };
+  });
 }
 
 function aggregateByDate(rows: ApiPpcDailyRow[]): ApiPpcDailyRow[] {
