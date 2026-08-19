@@ -298,6 +298,29 @@ const padDailyToWindow = (rows: MonthlyData[], from: Date, to: Date): MonthlyDat
   return padded;
 };
 
+/**
+ * An empty bucket for a vendor day or month.
+ *
+ * Everything a 1P feed cannot report stays at zero — the impressions series is
+ * withheld at render by isMetricPlottable rather than drawn as a flat line.
+ *
+ * buyBoxPercentage is the exception: it is deliberately ABSENT rather than 0.
+ * rpc_vendor_daily_totals is a day-grain roll-up of sales, units and glance
+ * views and carries no buy-box column, and the ASIN-grain read it replaced only
+ * ever took the MAX across that day's ASINs, which was never a day-level buy
+ * box anyway. Writing 0 would draw a flat "0% buy box" a client reads as a real
+ * collapse; leaving the key off makes recharts draw nothing, the same gap
+ * padDailyToWindow relies on for days the feed never reported.
+ */
+const emptyVendorRow = (label: string, year: number): MonthlyData =>
+  ({
+    month: label,
+    year,
+    sales: 0, unitsSold: 0, ppcSpend: 0, ppcSales: 0, acos: 0, tacos: 0,
+    impressions: 0, clicks: 0, cpc: 0, ctr: 0, cpa: 0, pageViews: 0,
+    conversionRate: 0, advertisingReliance: 0,
+  } as MonthlyData);
+
 // Fetch real historical data based on date filter with dynamic aggregation
 const fetchHistoricalData = async (
   merchantToken: string, 
@@ -397,7 +420,7 @@ const fetchHistoricalData = async (
       dateFilter,
       useDaily,
       vendorLagDays: isVendor ? VENDOR_LAG_DAYS : 0,
-      queryTable: isVendor ? 'vw_daily_vendor_data' : 'perplexity_sales_data + perplexity_ppc_campaigns',
+      queryTable: isVendor ? 'rpc_vendor_daily_totals' : 'perplexity_sales_data + perplexity_ppc_campaigns',
       filters: {
         merchant_token: isVendor ? merchantToken : undefined,
         record_date_gte: queryStartDateString,
@@ -405,52 +428,50 @@ const fetchHistoricalData = async (
       },
     });
 
-    // --- VENDOR PATH: query vw_daily_vendor_data ---
+    // --- VENDOR PATH: day-grain totals via rpc_vendor_daily_totals ---
+    //
+    // This used to page vw_daily_vendor_data a thousand rows at a time, with no
+    // cap on the loop. That view is ASIN-grain — ~2.5M rows for Portwest, and
+    // the default filter here asks for THIRTEEN MONTHS — so a single page load
+    // fired 166 requests over 28 seconds and usually timed out anyway.
+    //
+    // The RPC does the SUM in Postgres and hands back ONE ROW PER DAY, so there
+    // is nothing left to page: a 14-day Portwest window returns in ~167ms
+    // against 14.6s before, and the figures match vendor_daily_summary exactly.
     if (isVendor) {
-      console.log('🏪 MonthlyPerformanceView: fetching vendor data from vw_daily_vendor_data', {
+      console.log('🏪 MonthlyPerformanceView: fetching vendor data via rpc_vendor_daily_totals', {
         merchantToken,
-        table: 'vw_daily_vendor_data',
-        filters: {
-          merchant_token: merchantToken,
-          record_date_gte: queryStartDateString,
-          record_date_lte: queryEndDateString,
+        rpc: 'rpc_vendor_daily_totals',
+        args: {
+          p_merchant_token: merchantToken,
+          p_start: queryStartDateString,
+          p_end: queryEndDateString,
         },
-        aggregation: 'SUM(sales) grouped by day/month',
       });
 
-      const allVendorData: any[] = [];
-      let offset = 0;
-      const pageSize = 1000;
+      // The generated Supabase types are not regenerated in this repo, so the
+      // RPC name is not in the union — same cast useScopedMetrics uses.
+      const { data: vendorDaily, error: vendorError } = await (supabase.rpc as any)(
+        'rpc_vendor_daily_totals',
+        {
+          p_merchant_token: merchantToken,
+          p_start: queryStartDateString,
+          p_end: queryEndDateString,
+        },
+      );
 
-      while (true) {
-        const { data, error } = await supabase
-          .from('vw_daily_vendor_data')
-          .select('record_date, merchant_token, sales, units_ordered, page_views, buy_box_percentage')
-          .eq('merchant_token', merchantToken)
-          .gte('record_date', queryStartDateString)
-          .lte('record_date', queryEndDateString)
-          .order('record_date', { ascending: true })
-          .range(offset, offset + pageSize - 1);
+      // Loud on purpose. Swallowing this and returning [] made a broken fetch
+      // indistinguishable from a quiet trading period — the heatmap drew every
+      // cell as hatched "not reported" while the KPI cards, fed from an
+      // aggregated source, still showed real figures.
+      if (vendorError) throw vendorError;
 
-        if (error) { console.error('Error fetching vendor data:', error); break; }
-        if (!data || data.length === 0) break;
-
-        console.log('🏪 MonthlyPerformanceView: vendor page result', {
-          merchantToken,
-          offset,
-          fetchedRows: data.length,
-          sampleRows: data.slice(0, 5),
-        });
-
-        allVendorData.push(...data);
-        if (data.length < pageSize) break;
-        offset += pageSize;
-      }
+      const allVendorData: any[] = Array.isArray(vendorDaily) ? vendorDaily : [];
 
       if (allVendorData.length === 0) {
         console.log('🏪 MonthlyPerformanceView: no vendor data found', {
           merchantToken,
-          table: 'vw_daily_vendor_data',
+          rpc: 'rpc_vendor_daily_totals',
           record_date_gte: queryStartDateString,
           record_date_lte: queryEndDateString,
         });
@@ -467,24 +488,19 @@ const fetchHistoricalData = async (
       if (useDaily) {
         const dailyData: { [key: string]: MonthlyData } = {};
         allVendorData.forEach(row => {
-          const date = new Date(row.record_date);
-          const dateKey = row.record_date;
+          // Postgres hands a plain date back as 'yyyy-MM-dd'; slicing keeps the
+          // key stable for anyone whose clock is behind UTC.
+          const dateKey = String(row.record_date).slice(0, 10);
+          const date = new Date(dateKey);
           if (!dailyData[dateKey]) {
-            dailyData[dateKey] = {
-              month: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-              year: date.getFullYear(),
-              sales: 0, unitsSold: 0, ppcSpend: 0, ppcSales: 0, acos: 0, tacos: 0,
-              impressions: 0, clicks: 0, cpc: 0, ctr: 0, cpa: 0, pageViews: 0,
-              buyBoxPercentage: 0, conversionRate: 0, advertisingReliance: 0,
-            };
+            dailyData[dateKey] = emptyVendorRow(
+              date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+              date.getFullYear(),
+            );
           }
           dailyData[dateKey].sales += Number(row.sales) || 0;
-          dailyData[dateKey].unitsSold += Number(row.units_ordered) || 0;
-          dailyData[dateKey].pageViews += Number(row.page_views) || 0;
-          // Buy box is a percentage — take the max across rows for the same day
-          if ((Number(row.buy_box_percentage) || 0) > dailyData[dateKey].buyBoxPercentage) {
-            dailyData[dateKey].buyBoxPercentage = Number(row.buy_box_percentage) || 0;
-          }
+          dailyData[dateKey].unitsSold += Number(row.units) || 0;
+          dailyData[dateKey].pageViews += Number(row.glance_views) || 0;
         });
 
         const startKey = startDate.toISOString().split('T')[0];
@@ -507,23 +523,15 @@ const fetchHistoricalData = async (
       } else {
         const monthlyData: { [key: string]: MonthlyData } = {};
         allVendorData.forEach(row => {
-          const date = new Date(row.record_date);
+          const date = new Date(String(row.record_date).slice(0, 10));
           const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
           const monthName = date.toLocaleDateString('en-US', { month: 'short' });
           if (!monthlyData[monthKey]) {
-            monthlyData[monthKey] = {
-              month: monthName, year: date.getFullYear(),
-              sales: 0, unitsSold: 0, ppcSpend: 0, ppcSales: 0, acos: 0, tacos: 0,
-              impressions: 0, clicks: 0, cpc: 0, ctr: 0, cpa: 0, pageViews: 0,
-              buyBoxPercentage: 0, conversionRate: 0, advertisingReliance: 0,
-            };
+            monthlyData[monthKey] = emptyVendorRow(monthName, date.getFullYear());
           }
           monthlyData[monthKey].sales += Number(row.sales) || 0;
-          monthlyData[monthKey].unitsSold += Number(row.units_ordered) || 0;
-          monthlyData[monthKey].pageViews += Number(row.page_views) || 0;
-          if ((Number(row.buy_box_percentage) || 0) > monthlyData[monthKey].buyBoxPercentage) {
-            monthlyData[monthKey].buyBoxPercentage = Number(row.buy_box_percentage) || 0;
-          }
+          monthlyData[monthKey].unitsSold += Number(row.units) || 0;
+          monthlyData[monthKey].pageViews += Number(row.glance_views) || 0;
         });
 
         console.log('🏪 MonthlyPerformanceView: vendor monthly aggregation result', {
@@ -726,8 +734,13 @@ const fetchHistoricalData = async (
       return sortedData;
     }
   } catch (error) {
+    // Rethrow rather than returning []. An empty array here is the same value
+    // "this account genuinely traded nothing" produces, so the caller had no
+    // way to tell a dead query from a quiet fortnight and rendered the
+    // "No historical data available" panel for both. loadData below turns this
+    // into a visible failure instead.
     console.error('Error fetching historical data:', error);
-    return [];
+    throw error;
   }
 };
 
@@ -1121,6 +1134,8 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
 }) => {
   const [data, setData] = useState<MonthlyData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  /** Set when the fetch itself failed — kept apart from "no rows came back". */
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [internalSelectedMetrics, setInternalSelectedMetrics] = useState<string[]>(DEFAULT_CHART_METRICS);
 
   // Get metrics with proper currency formatting
@@ -1162,9 +1177,10 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
       }
       
       setIsLoading(true);
-      
+      setLoadError(null);
+
       let historicalData: MonthlyData[] = [];
-      
+
       // For vendor accounts, always use direct Supabase query (no Google Sheets or hybrid data)
       // — isVendor is computed once at component scope.
 
@@ -1268,7 +1284,15 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
       setIsLoading(false);
     };
 
-    loadData();
+    // fetchHistoricalData now rethrows instead of returning [], so the failure
+    // has to land somewhere: clear the series and say so, rather than let the
+    // "No historical data available" panel stand in for a dead query.
+    loadData().catch((err: any) => {
+      console.error('MonthlyPerformanceView: performance data fetch failed', err);
+      setData([]);
+      setLoadError(err?.message || 'Could not load performance data');
+      setIsLoading(false);
+    });
   }, [merchantToken, accountName, dateFilter, customDateRange, externalData, useHybridData, ppcAccountName]);
   
   const toggleMetric = (metricKey: string) => {
@@ -1348,6 +1372,19 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
               <div className="text-center">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
                 <div className="text-sm text-gray-500">Loading performance data...</div>
+              </div>
+            </div>
+          ) : loadError ? (
+            /* A failed fetch must never wear the empty state's clothes. "No
+               historical data available" is a statement about the account;
+               this is a statement about the query. */
+            <div className="h-[400px] flex items-center justify-center text-red-700 border-2 border-red-200 bg-red-50 rounded-lg">
+              <div className="text-center space-y-2 px-6">
+                <div className="text-lg font-medium">Performance data could not be loaded</div>
+                <div className="text-sm">{loadError}</div>
+                <div className="text-xs text-red-500">
+                  This is a failed request, not an empty period — the figures below may be incomplete.
+                </div>
               </div>
             </div>
           ) : data.length === 0 ? (

@@ -285,7 +285,13 @@ export class HybridDataService {
   }
 
   /**
-   * Fetch vendor data from hybrid sources
+   * Fetch vendor data from hybrid sources.
+   *
+   * ⚠️ UNSAFE — DORMANT. No caller anywhere in src/ as of this change. Its
+   * banked leg (fetchBankedVendorData) reads every vendor account unfiltered
+   * and is silently truncated at 1000 rows; see the warning on that method
+   * before using this. Vendor day-grain totals should come from
+   * rpc_vendor_daily_totals.
    */
   async fetchVendorData(dateRange: { from: Date; to: Date }): Promise<HybridDataResult<any[]>> {
     const strategy = this.getDataSourceStrategy(dateRange);
@@ -388,6 +394,21 @@ export class HybridDataService {
     return (data || []).map(row => this.convertBankedPPCToSheetFormat(row));
   }
 
+  /**
+   * ⚠️ UNSAFE — DORMANT. Do not wire this up as it stands.
+   *
+   * `select('*')` on vw_daily_vendor_data with no merchant-token filter, no
+   * .range() and no paging. That view is ASIN-grain across every vendor
+   * account — ~2.5M rows for Portwest alone — and PostgREST silently caps an
+   * unranged read at 1000 rows. So this does not fail: it returns a fragment
+   * of one arbitrary account's data, wearing the shape of a complete answer.
+   *
+   * Verified dormant as of this change: nothing outside this file calls
+   * hybridDataService.fetchVendorData, which is its only caller. Kept rather
+   * than deleted so the conversion helpers below stay intact, but anyone
+   * reviving it must filter by merchant token and read day-grain totals from
+   * rpc_vendor_daily_totals instead — the same fix MonthlyPerformanceView took.
+   */
   private async fetchBankedVendorData(dateRange: { from: Date; to: Date }): Promise<any[]> {
     const { data, error } = await supabase
       .from('vw_daily_vendor_data')

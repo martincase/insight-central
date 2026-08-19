@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { useApiPpcData, type AdType } from '@/hooks/useApiPpcData';
 import { calculatePeriodData, getCurrentDateRange, getPreviousDateRange } from '@/utils/dataProcessor';
@@ -53,6 +53,33 @@ import { AIAnalystChat } from '@/components/dashboard/AIAnalystChat';
 
 type ClientTab = 'performance' | 'search-terms' | 'advertised-products' | 'brand-analytics' | 'profit-loss' | 'inventory-planner';
 
+/**
+ * How far back the ASIN-grain vendor fetch has to reach for a given selection.
+ *
+ * vw_daily_vendor_data is ~2.5M rows for Portwest, so an unbounded reach simply
+ * never returns — the window on screen plus a margin for the vendor feed lag is
+ * what the tables actually render, and the 14/120-day clamp stops an unusual
+ * filter asking for either a single day or a whole year of per-ASIN rows. That
+ * much is the clamp Index.tsx and SharedView.tsx already use.
+ *
+ * The DOUBLING is this page's addition. processASINData does not just filter to
+ * the selected window, it also builds the PREVIOUS period to compare against —
+ * so a 14-day selection needs 28 days of rows, not 14. ClientView fetched a
+ * flat 90 days before this change, which happened to cover that; bounding to
+ * the current window alone would have emptied every comparison column and drawn
+ * the deltas as though nothing had changed. Index.tsx and SharedView.tsx feed
+ * the same processASINData from the un-doubled clamp and have the same
+ * shortfall — worth fixing there too, but not in the middle of this change.
+ */
+const vendorLookbackDaysFor = (
+  filter: DateFilter,
+  range?: { from: Date; to: Date },
+): number => {
+  const window = filter === 'custom' && range ? range : getCurrentDateRange(filter);
+  const windowDays = Math.ceil((Date.now() - new Date(window.from).getTime()) / 86400000);
+  return Math.min(120, Math.max(14, windowDays * 2 + 4));
+};
+
 const ClientView = () => {
   const { accountId, token } = useParams<{ accountId: string; token: string }>();
   const { isEnabled, getMessageType, getFeatureName, isLoading: featuresLoading } = useFeatureVisibility();
@@ -73,6 +100,25 @@ const ClientView = () => {
   const [isDataLoading, setIsDataLoading] = useState(true);
   const { selectedChartMetrics, toggleChartMetric } = useChartMetrics();
   const [error, setError] = useState<string | null>(null);
+  /**
+   * A non-fatal fetch failure, kept apart from `error` (which blanks the page).
+   *
+   * The product-level Supabase fetches below both `.catch(... return [])`, and
+   * an empty array is exactly what a client who genuinely sold nothing
+   * produces — so a dead query used to render as a legitimately quiet period.
+   * Same reasoning as useScopedMetrics: say the request failed rather than let
+   * the absence stand in for a figure.
+   */
+  const [dataFetchError, setDataFetchError] = useState<string | null>(null);
+  /**
+   * How many days of ASIN-grain vendor rows we have actually fetched.
+   *
+   * loadClientData only re-runs when the account or token changes, so widening
+   * the date filter would otherwise leave the product tables showing a window
+   * shorter than the one on screen. The ref lets the refetch below fire only
+   * when the selection reaches back further than what is already in hand.
+   */
+  const fetchedVendorLookbackRef = useRef(0);
   const [activeTab, setActiveTab] = useState<ClientTab>('performance');
   const [adType, setAdType] = useState<AdType>('all');
   // API PPC data hook - fetches from Amazon Advertising API tables
@@ -137,6 +183,44 @@ const ClientView = () => {
     }
   }, [dateFilter, customDateRange]);
 
+  /**
+   * Widen the vendor fetch when the client picks a longer window.
+   *
+   * loadClientData runs once per account, so bounding its vendor fetch to the
+   * window on screen would otherwise strand the product tables on whatever
+   * window happened to be selected at mount — pick "This Year" and the tables
+   * would still only hold a fortnight. Only fetches when the new selection
+   * reaches back FURTHER than what is already in hand, so narrowing the filter
+   * (the common case) costs nothing.
+   */
+  useEffect(() => {
+    if (!account) return;
+    const isVendor = account.merchantToken?.startsWith('amzn1.vg');
+    if (!isVendor) return;
+
+    const needed = vendorLookbackDaysFor(dateFilter, customDateRange);
+    if (needed <= fetchedVendorLookbackRef.current) return;
+
+    let cancelled = false;
+    fetchedVendorLookbackRef.current = needed;
+    fetchVendorDataFromSupabase(account.merchantToken, needed)
+      .then(async rows => {
+        if (cancelled) return;
+        setRawVendorData(rows);
+        const { processASINData } = await import('@/utils/asinProcessor');
+        setAsinData(processASINData([], account.merchantToken, dateFilter, customDateRange, rows));
+      })
+      .catch(err => {
+        if (cancelled) return;
+        console.error('Vendor Supabase refetch error:', err);
+        // Do not fall back to the shorter window silently — it would show a
+        // fortnight's figures under a "This Year" heading.
+        setDataFetchError('Vendor product data could not be loaded for this period.');
+      });
+
+    return () => { cancelled = true; };
+  }, [account, dateFilter, customDateRange]);
+
   const loadClientData = async () => {
     console.log('loadClientData called with:', { accountId, token });
     
@@ -149,7 +233,8 @@ const ClientView = () => {
 
     try {
       setIsLoading(true);
-      
+      setDataFetchError(null);
+
       console.log('ClientView: Loading data for accountId:', accountId, 'token:', token);
       
       // Fetch all accounts to find the matching one
@@ -186,6 +271,20 @@ const ClientView = () => {
       console.log('ClientView: Token format is valid, proceeding with account:', potentialAccount.name);
       console.log('ClientView: Setting single account:', potentialAccount);
       console.log('ClientView: Account type:', potentialAccount.type);
+
+      // Both Supabase fetches below used to be called with NO arguments at
+      // all: no merchant-token filter and the 90-day default, i.e. every
+      // vendor account's ASIN-grain rows at once, unbounded. For Portwest
+      // alone that is hundreds of thousands of records paged a thousand at a
+      // time, so the request never finished — and the catch handed back [],
+      // which the rest of the page cannot tell apart from "sold nothing".
+      //
+      // Claim the lookback BEFORE setAccount, or the widening effect above
+      // would see a ref of 0 the moment the account lands and fire a second,
+      // identical fetch alongside this one.
+      const vendorLookbackDays = vendorLookbackDaysFor(dateFilter, customDateRange);
+      fetchedVendorLookbackRef.current = vendorLookbackDays;
+
       setAccount(potentialAccount);
       setIsLoading(false); // Show layout immediately with skeletons
 
@@ -202,8 +301,18 @@ const ClientView = () => {
         fetchInventoryData(),
         fetch(`https://sheets.googleapis.com/v4/spreadsheets/${GOOGLE_SHEETS_CONFIG.SHEET_ID}/values/${GOOGLE_SHEETS_CONFIG.RANGE}?key=${GOOGLE_SHEETS_CONFIG.API_KEY}`),
         fetch(`https://sheets.googleapis.com/v4/spreadsheets/${GOOGLE_SHEETS_CONFIG.SHEET_ID}/values/${GOOGLE_SHEETS_CONFIG.PPC_RANGE}?key=${GOOGLE_SHEETS_CONFIG.API_KEY}`),
-        fetchASINDataFromSupabase().catch(err => { console.error('ASIN fetch error:', err); return []; }),
-        fetchVendorDataFromSupabase().catch(err => { console.error('Vendor Supabase fetch error:', err); return []; })
+        fetchASINDataFromSupabase(potentialAccount.merchantToken)
+          .catch(err => {
+            console.error('ASIN fetch error:', err);
+            setDataFetchError('Product-level data could not be loaded for this period.');
+            return [];
+          }),
+        fetchVendorDataFromSupabase(potentialAccount.merchantToken, vendorLookbackDays)
+          .catch(err => {
+            console.error('Vendor Supabase fetch error:', err);
+            setDataFetchError('Vendor product data could not be loaded for this period.');
+            return [];
+          })
       ]);
 
       // Process vendor data
@@ -455,6 +564,16 @@ const ClientView = () => {
               accountName={account.name}
               hideConfigButton={true}
             />
+
+            {/* A failed fetch says so. Without this the product tables below
+                render their ordinary empty state, which reads as "this client
+                sold nothing" rather than "we could not ask the question". */}
+            {dataFetchError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+                <span className="font-medium">Some data could not be loaded. </span>
+                {dataFetchError} Figures shown may be incomplete — please refresh, and let us know if it persists.
+              </div>
+            )}
 
             {/* Daily Performance Section */}
             <section>

@@ -145,6 +145,14 @@ export class DataGapAnalyzer {
       let data: any[] | null = null;
       let error: any = null;
 
+      // KNOWN LIMITATION, seller side. daily_campaign_data is campaign-grain
+      // and daily_inventory_data is SKU-grain, and neither read below pages or
+      // ranges — so PostgREST caps them at 1000 rows and a large account's
+      // 60-day window is truncated, producing gaps that are not real. The
+      // vendor case, which was by far the worst (ASIN grain, ~2.5M rows for
+      // Portwest), is fixed below by moving to a day-grain RPC; the seller
+      // tables need the same treatment and have NOT had it yet.
+      //
       // Use explicit table queries to avoid TypeScript issues
       switch (tableName) {
         case 'daily_sales_ppc_data':
@@ -166,13 +174,30 @@ export class DataGapAnalyzer {
             .order(dateColumn, { ascending: true }));
           break;
         case 'vw_daily_vendor_data':
-          ({ data, error } = await supabase
-            .from('vw_daily_vendor_data')
-            .select(dateColumn)
-            .eq('merchant_token', merchantToken)
-            .gte(dateColumn, format(startDate, 'yyyy-MM-dd'))
-            .lte(dateColumn, format(endDate, 'yyyy-MM-dd'))
-            .order(dateColumn, { ascending: true }));
+          // Day-grain RPC, not the ASIN-grain view.
+          //
+          // This read had no .range() and no limit, so PostgREST silently
+          // capped it at 1000 rows. vw_daily_vendor_data is one row per ASIN
+          // per day — for Portwest 1000 rows is a day or two of a 60-day
+          // window, so the analyser declared almost every day a gap and
+          // AdminView showed that for every vendor account it loops. A false
+          // gap report is worse than none.
+          //
+          // rpc_vendor_daily_totals returns ONE ROW PER DAY, so 60 days is 60
+          // rows and nothing is truncated. It exposes record_date, which is
+          // what dateColumn is for every vendor config here.
+          ({ data, error } = await (supabase.rpc as any)('rpc_vendor_daily_totals', {
+            p_merchant_token: merchantToken,
+            p_start: format(startDate, 'yyyy-MM-dd'),
+            p_end: format(endDate, 'yyyy-MM-dd'),
+          }));
+          // The RPC does not promise an order, and lastDataDate below reads the
+          // final element.
+          if (!error && Array.isArray(data)) {
+            data = [...data].sort((a, b) =>
+              String(a[dateColumn]).localeCompare(String(b[dateColumn])),
+            );
+          }
           break;
         case 'daily_inventory_data':
           ({ data, error } = await supabase
@@ -200,12 +225,20 @@ export class DataGapAnalyzer {
       }
 
       if (error) {
+        // Deliberately no gap rather than a gap for every day: a failed query
+        // knows nothing about coverage, and a false "60 days missing" on the
+        // admin board is worse than a quiet one.
         console.error(`Failed to fetch ${dataType} data:`, error);
         return null;
       }
 
+      // Postgres hands a plain date back as 'yyyy-MM-dd'. Round-tripping that
+      // through new Date() parses it as UTC midnight and then formats it in
+      // local time, so anyone west of UTC — Martin, on US Eastern — would see
+      // every date land on the previous day and every day reported as a gap.
+      // The expected dates below are local Dates, so compare on the raw string.
       const existingDates = new Set(
-        data?.map(row => format(new Date(row[dateColumn]), 'yyyy-MM-dd')) || []
+        data?.map(row => String(row[dateColumn]).slice(0, 10)) || []
       );
 
       // Generate all expected dates
