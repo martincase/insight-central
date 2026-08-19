@@ -204,57 +204,36 @@ async function fetchSdData(profileId: number, startDate: string, endDate: string
 }
 
 async function fetchVendorData(merchantToken: string, startDate: string, endDate: string): Promise<ApiPpcDailyRow[]> {
-  // vw_daily_vendor_data is ASIN-grain: Portwest alone has 2.5M rows, ~17k of
-  // them inside a single 7-day window. Paging that 1,000 at a time blew the
-  // 30-second timeout, vendorData came back empty, and every heatmap cell
-  // hatched as "not reported" while the KPI cards - fed from a different,
-  // aggregated source - still showed figures. One empty fetch, two symptoms.
-  //
-  // vw_vendor_daily_country is the same data already aggregated to day x country,
-  // so a fortnight is a dozen rows instead of thirty-four thousand. The merchant
-  // token carries the country as its suffix (amzn1.vg.2072811-GB).
-  const sep = merchantToken.lastIndexOf('-');
-  const spid = sep > 0 ? merchantToken.slice(0, sep) : merchantToken;
-  const countryCode = sep > 0 ? merchantToken.slice(sep + 1).toUpperCase() : null;
-
-  let query = supabase
-    .from('vw_vendor_daily_country')
-    .select('record_date, ordered_revenue_native, ordered_units, glance_views')
-    .eq('spid', spid)
-    .gte('record_date', startDate)
-    .lte('record_date', endDate);
-  if (countryCode) query = query.eq('country_code', countryCode);
-
-  const { data, error } = await query;
-  if (error) {
-    console.error('Vendor fetch error:', error);
-    return [];
+  const rows: ApiPpcDailyRow[] = [];
+  let from = 0;
+  const batchSize = 1000;
+  while (true) {
+    const { data, error } = await supabase
+      .from('vw_daily_vendor_data')
+      .select('record_date, sales, units_ordered, page_views, buy_box_percentage')
+      .eq('merchant_token', merchantToken)
+      .gte('record_date', startDate)
+      .lte('record_date', endDate)
+      .range(from, from + batchSize - 1);
+    if (error) { console.error('Vendor fetch error:', error); break; }
+    if (!data || data.length === 0) break;
+    for (const r of data) {
+      rows.push({
+        date: r.record_date,
+        impressions: 0,
+        clicks: 0,
+        spend: 0,
+        sales: Number(r.sales) || 0,
+        orders: Number(r.units_ordered) || 0,
+        pageViews: Number(r.page_views) || 0,
+        buyBoxPercentage: Number(r.buy_box_percentage) || 0,
+        unitsOrdered: Number(r.units_ordered) || 0,
+      });
+    }
+    if (data.length < batchSize) break;
+    from += batchSize;
   }
-
-  // Day x country is already unique, but a scope with no country suffix would
-  // return one row per market for the same day, so fold on the date either way.
-  const byDate = new Map<string, ApiPpcDailyRow>();
-  for (const r of data ?? []) {
-    const key = String((r as any).record_date);
-    const row = byDate.get(key) ?? {
-      date: key,
-      impressions: 0,
-      clicks: 0,
-      spend: 0,
-      sales: 0,
-      orders: 0,
-      pageViews: 0,
-      buyBoxPercentage: 0,
-      unitsOrdered: 0,
-    };
-    const units = Number((r as any).ordered_units) || 0;
-    row.sales += Number((r as any).ordered_revenue_native) || 0;
-    row.orders += units;
-    row.unitsOrdered += units;
-    row.pageViews = (row.pageViews ?? 0) + (Number((r as any).glance_views) || 0);
-    byDate.set(key, row);
-  }
-  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+  return rows;
 }
 
 function aggregateByDate(rows: ApiPpcDailyRow[]): ApiPpcDailyRow[] {
