@@ -122,11 +122,17 @@ const ClientView = () => {
   const [activeTab, setActiveTab] = useState<ClientTab>('performance');
   const [adType, setAdType] = useState<AdType>('all');
   // API PPC data hook - fetches from Amazon Advertising API tables
+  // merchantToken is what tells the hook this is a vendor. Without it Portwest
+  // and S Green took the SELLER path, so their "Ordered Revenue" card was fed
+  // apiPpcMetrics.sales -- which on that path is ATTRIBUTED AD SALES. This view
+  // has been reporting a vendor's ad sales as its turnover: £90,179 where the
+  // real ordered revenue was £221,946.
   const { metrics: apiPpcMetrics, previousMetrics: apiPpcPreviousMetrics, isLoading: apiPpcLoading } = useApiPpcData({
     accountName: account?.name || '',
     dateFilter,
     customDateRange,
     adType,
+    merchantToken: account?.merchantToken,
   });
 
   // Compute direct organic metrics from raw sheetData

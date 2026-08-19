@@ -11,7 +11,18 @@ export interface ApiPpcMetrics {
   impressions: number;
   clicks: number;
   spend: number;
+  /**
+   * SELLER: attributed ad sales. VENDOR: ORDERED REVENUE — not advertising.
+   *
+   * The two paths have always meant different things by this field, and the
+   * vendor "Ordered Revenue" card plus the shared-view heatmap both read it.
+   * That is why advertising revenue gets its own field below rather than being
+   * folded in here: overloading `sales` would make the revenue card print ad
+   * sales the moment vendors gained advertising.
+   */
   sales: number;
+  /** Attributed ad sales on BOTH paths. Equals `sales` for sellers. */
+  adSales: number;
   orders: number;
   cpc: number;
   ctr: number;
@@ -24,7 +35,10 @@ export interface ApiPpcDailyRow {
   impressions: number;
   clicks: number;
   spend: number;
+  /** Seller: ad sales. Vendor: ordered revenue. See ApiPpcMetrics.sales. */
   sales: number;
+  /** Attributed ad sales on both paths. Equals `sales` for sellers. */
+  adSales: number;
   orders: number;
   // Vendor-specific fields
   pageViews?: number;
@@ -51,16 +65,19 @@ interface UseApiPpcDataResult {
 }
 
 const EMPTY_METRICS: ApiPpcMetrics = {
-  impressions: 0, clicks: 0, spend: 0, sales: 0, orders: 0,
+  impressions: 0, clicks: 0, spend: 0, sales: 0, adSales: 0, orders: 0,
   cpc: 0, ctr: 0, acos: 0, cpa: 0,
 };
 
-function calcDerived(raw: { impressions: number; clicks: number; spend: number; sales: number; orders: number }): ApiPpcMetrics {
+function calcDerived(raw: { impressions: number; clicks: number; spend: number; sales: number; adSales: number; orders: number }): ApiPpcMetrics {
   return {
     ...raw,
     cpc: raw.clicks > 0 ? raw.spend / raw.clicks : 0,
     ctr: raw.impressions > 0 ? (raw.clicks / raw.impressions) * 100 : 0,
-    acos: raw.sales > 0 ? (raw.spend / raw.sales) * 100 : 0,
+    // ACOS is ad spend over AD sales. On the seller path adSales === sales, so
+    // this is unchanged; on the vendor path `sales` is ordered revenue and using
+    // it here would have produced a number roughly thirty times too flattering.
+    acos: raw.adSales > 0 ? (raw.spend / raw.adSales) * 100 : 0,
     cpa: raw.orders > 0 ? raw.spend / raw.orders : 0,
   };
 }
@@ -134,6 +151,7 @@ async function fetchSpData(profileId: number, startDate: string, endDate: string
         clicks: Number(r.clicks) || 0,
         spend: Number(r.spend) || 0,
         sales: Number(r.sales_7d) || 0,
+        adSales: Number(r.sales_7d) || 0,
         orders: Number(r.orders_7d) || 0,
       });
     }
@@ -164,6 +182,7 @@ async function fetchSbData(profileId: number, startDate: string, endDate: string
         clicks: Number(r.clicks) || 0,
         spend: Number(r.cost) || 0,
         sales: Number(r.sales_14d) || 0,
+        adSales: Number(r.sales_14d) || 0,
         orders: Number(r.purchases_14d) || 0,
       });
     }
@@ -194,6 +213,7 @@ async function fetchSdData(profileId: number, startDate: string, endDate: string
         clicks: Number(r.clicks) || 0,
         spend: Number(r.cost) || 0,
         sales: Number(r.sales_14d) || 0,
+        adSales: Number(r.sales_14d) || 0,
         orders: Number(r.purchases_14d) || 0,
       });
     }
@@ -236,12 +256,52 @@ async function fetchVendorData(merchantToken: string, startDate: string, endDate
       clicks: 0,
       spend: 0,
       sales: Number(r.sales) || 0,
+      adSales: 0,
       orders: units,
       pageViews: Number(r.glance_views) || 0,
       buyBoxPercentage: 0,
       unitsOrdered: units,
     };
   });
+}
+
+/**
+ * Advertising for a vendor, day by day.
+ *
+ * Vendors could never use the seller path. That one filters the campaign tables
+ * on a single accounts_master.profile_id, but a vendor has one ads profile PER
+ * MARKET — Portwest has five (UK, DE, FR, IT, ES), under different
+ * selling_partner_ids — and vendor ads rows carry an Amazon Ads ENTITY id
+ * rather than the merchant token, so no join on the merchant token could ever
+ * match. Portwest's advertising was therefore invisible: £6,871 of spend and
+ * £142,838 of ad sales in a fortnight, all of it reported as £187.
+ *
+ * rpc_ads_daily_totals resolves the ads accounts through month_end_ads_map (the
+ * canonical registry, matched on ads account AND ads country) and already
+ * unions Sponsored Products, Brands and Display. GBP is taken rather than
+ * native because these figures sit beside GBP sales on the same cards.
+ */
+async function fetchVendorAdsData(merchantToken: string, startDate: string, endDate: string): Promise<ApiPpcDailyRow[]> {
+  const { data, error } = await supabase.rpc('rpc_ads_daily_totals' as any, {
+    p_merchant_token: merchantToken,
+    p_start: startDate,
+    p_end: endDate,
+  });
+
+  // Thrown, never swallowed — a silent [] here would show a vendor a dashboard
+  // reporting no advertising at all, which is exactly the bug being fixed.
+  if (error) throw error;
+
+  return ((data ?? []) as any[]).map((r) => ({
+    date: String(r.record_date),
+    impressions: Number(r.impressions) || 0,
+    clicks: Number(r.clicks) || 0,
+    spend: Number(r.spend_gbp) || 0,
+    // Ordered revenue belongs to the sales feed, not here.
+    sales: 0,
+    adSales: Number(r.ad_sales_gbp) || 0,
+    orders: 0,
+  }));
 }
 
 function aggregateByDate(rows: ApiPpcDailyRow[]): ApiPpcDailyRow[] {
@@ -253,6 +313,7 @@ function aggregateByDate(rows: ApiPpcDailyRow[]): ApiPpcDailyRow[] {
       existing.clicks += r.clicks;
       existing.spend += r.spend;
       existing.sales += r.sales;
+      existing.adSales += r.adSales;
       existing.orders += r.orders;
       if (r.pageViews !== undefined) existing.pageViews = (existing.pageViews || 0) + r.pageViews;
       if (r.unitsOrdered !== undefined) existing.unitsOrdered = (existing.unitsOrdered || 0) + r.unitsOrdered;
@@ -265,14 +326,15 @@ function aggregateByDate(rows: ApiPpcDailyRow[]): ApiPpcDailyRow[] {
   return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
 }
 
-function sumRows(rows: ApiPpcDailyRow[]): { impressions: number; clicks: number; spend: number; sales: number; orders: number } {
+function sumRows(rows: ApiPpcDailyRow[]): { impressions: number; clicks: number; spend: number; sales: number; adSales: number; orders: number } {
   return rows.reduce((acc, r) => ({
     impressions: acc.impressions + r.impressions,
     clicks: acc.clicks + r.clicks,
     spend: acc.spend + r.spend,
     sales: acc.sales + r.sales,
+    adSales: acc.adSales + r.adSales,
     orders: acc.orders + r.orders,
-  }), { impressions: 0, clicks: 0, spend: 0, sales: 0, orders: 0 });
+  }), { impressions: 0, clicks: 0, spend: 0, sales: 0, adSales: 0, orders: 0 });
 }
 
 function filterByAdType(
@@ -362,13 +424,21 @@ export function useApiPpcData({
         const { prevStart, prevEnd } = getPreviousPeriodDates();
 
         if (isVendor && merchantToken) {
-          // VENDOR PATH: query vw_daily_vendor_data
-          const [current, prev] = await Promise.all([
+          // VENDOR PATH: ordered revenue from the sales feed, advertising from
+          // the ads registry. Two separate sources deliberately kept apart —
+          // `sales` stays ordered revenue and `adSales` carries advertising, so
+          // the Ordered Revenue card cannot start printing ad sales.
+          const [current, prev, ads, prevAds] = await Promise.all([
             fetchVendorData(merchantToken, startDate, endDate),
             prevStart && prevEnd ? fetchVendorData(merchantToken, prevStart, prevEnd) : Promise.resolve([]),
+            fetchVendorAdsData(merchantToken, startDate, endDate),
+            prevStart && prevEnd ? fetchVendorAdsData(merchantToken, prevStart, prevEnd) : Promise.resolve([]),
           ]);
-          setRawVendor(current);
-          setPrevRawVendor(prev);
+          // aggregateByDate folds the two feeds together on the date key. A day
+          // that advertised but sold nothing, or sold but did not advertise,
+          // still produces a row — neither feed is treated as the spine.
+          setRawVendor([...current, ...ads]);
+          setPrevRawVendor([...prev, ...prevAds]);
           // Clear seller data
           setRawSp([]); setRawSb([]); setRawSd([]);
           setPrevRawSp([]); setPrevRawSb([]); setPrevRawSd([]);

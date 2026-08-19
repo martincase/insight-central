@@ -381,12 +381,19 @@ const SharedView = ({ forcedShareId, forcedBrandName, isDemo }: SharedViewProps 
 
   const vendorHeatmapRows = useMemo(() => {
     if (account?.type !== 'vendor' || !apiPpcAllDaily?.length) return [];
-    return apiPpcAllDaily.map((d: any) => ({
-      merchant_token: account.merchantToken,
-      record_date: d.date,
-      sales: d.sales ?? 0,
-      units_ordered: d.unitsOrdered ?? d.orders ?? 0,
-    }));
+    // The vendor series now carries advertising days as well as sales days. A
+    // day that only advertised has no ordered revenue, and emitting it as
+    // `sales: 0` would draw a real, reported zero on the heatmap for a day the
+    // sales feed simply has not delivered. Only days the SALES feed produced
+    // belong here; the heatmap's own hatching handles the rest.
+    return apiPpcAllDaily
+      .filter((d: any) => d.unitsOrdered !== undefined || (d.sales ?? 0) > 0)
+      .map((d: any) => ({
+        merchant_token: account.merchantToken,
+        record_date: d.date,
+        sales: d.sales ?? 0,
+        units_ordered: d.unitsOrdered ?? 0,
+      }));
   }, [account, apiPpcAllDaily]);
 
   // Feature flag to control ASIN functionality in SharedView

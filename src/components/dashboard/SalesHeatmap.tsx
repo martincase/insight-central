@@ -156,14 +156,19 @@ const SalesHeatmapInner = ({ accounts, sheetData, ppcData, vendorData = [], supa
     if (!apiPpcDailyData || apiPpcDailyData.length === 0) {
       return null;
     }
+    // adSales, not sales. On the seller path the two are the same value, but on
+    // the vendor path `sales` carries ORDERED REVENUE — so once vendors gained
+    // advertising and these rows became visible, reading `sales` would have
+    // drawn Portwest's turnover in the PPC Sales row and an ACOS against it.
     const map = new Map<string, { ppcSpend: number; ppcSales: number }>();
     for (const row of apiPpcDailyData) {
+      const adSales = row.adSales ?? 0;
       const existing = map.get(row.date);
       if (existing) {
         existing.ppcSpend += row.spend;
-        existing.ppcSales += row.sales;
+        existing.ppcSales += adSales;
       } else {
-        map.set(row.date, { ppcSpend: row.spend, ppcSales: row.sales });
+        map.set(row.date, { ppcSpend: row.spend, ppcSales: adSales });
       }
     }
     return map;

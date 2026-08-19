@@ -253,7 +253,10 @@ export const MetricsGrid = ({
 
   // PPC metrics: use API if available, otherwise fall back to daily_asin_data
   const ppcSpend = hasApiPpc ? apiPpcMetrics.spend : totalMetrics.ppcSpend;
-  const ppcSales = hasApiPpc ? apiPpcMetrics.sales : totalMetrics.ppcSales;
+  // adSales, not sales. They are the same number on the seller path, but on the
+  // vendor path `sales` is ORDERED REVENUE — reading it here would have printed
+  // Portwest's turnover in the PPC Sales card and computed ACOS against it.
+  const ppcSales = hasApiPpc ? apiPpcMetrics.adSales : totalMetrics.ppcSales;
   const ppcImpressions = hasApiPpc ? apiPpcMetrics.impressions : totalMetrics.impressions;
   const ppcClicks = hasApiPpc ? apiPpcMetrics.clicks : totalMetrics.clicks;
   const ppcOrders = hasApiPpc ? apiPpcMetrics.orders : totalMetrics.unitsOrdered;
@@ -269,7 +272,7 @@ export const MetricsGrid = ({
   const ppcCpa = adsAvailable ? ratio(ppcSpend, ppcOrders) : null;
 
   const prevPpcSpend = hasApiPpc && apiPpcPreviousMetrics ? apiPpcPreviousMetrics.spend : totalPreviousMetrics.ppcSpend;
-  const prevPpcSales = hasApiPpc && apiPpcPreviousMetrics ? apiPpcPreviousMetrics.sales : totalPreviousMetrics.ppcSales;
+  const prevPpcSales = hasApiPpc && apiPpcPreviousMetrics ? apiPpcPreviousMetrics.adSales : totalPreviousMetrics.ppcSales;
   const prevPpcImpressions = hasApiPpc && apiPpcPreviousMetrics ? apiPpcPreviousMetrics.impressions : totalPreviousMetrics.impressions;
   const prevPpcClicks = hasApiPpc && apiPpcPreviousMetrics ? apiPpcPreviousMetrics.clicks : totalPreviousMetrics.clicks;
   const prevPpcOrders = hasApiPpc && apiPpcPreviousMetrics ? apiPpcPreviousMetrics.orders : totalPreviousMetrics.unitsOrdered;
@@ -647,6 +650,39 @@ export const MetricsGrid = ({
                   previousValue={rateDelta(prevPpcCpc)}
                   previousDisplayValue={rateMoney(prevPpcCpc)}
                   comparisonLabel={comparisonLabel}
+                />
+                {/* Impressions, clicks and CTR come through the same ads feed as
+                    spend, so a vendor gets them on the same terms a seller does.
+                    CPA is deliberately absent: the vendor ads source carries no
+                    attributed orders, and dividing spend by ORDERED units would
+                    be a different metric wearing CPA's name. */}
+                <MetricsCard
+                  title="PPC Impressions"
+                  value={adsCount(ppcImpressions)}
+                  color="text-blue-600"
+                  currentValue={ppcImpressions}
+                  previousValue={prevPpcImpressions}
+                  comparisonLabel={comparisonLabel}
+                  sparklineData={sparklines.impressions}
+                />
+                <MetricsCard
+                  title="PPC Clicks"
+                  value={adsCount(ppcClicks)}
+                  color="text-cyan-600"
+                  currentValue={ppcClicks}
+                  previousValue={prevPpcClicks}
+                  comparisonLabel={comparisonLabel}
+                  sparklineData={sparklines.clicks}
+                />
+                <MetricsCard
+                  title="CTR"
+                  value={ratePct(ppcCtr)}
+                  color="text-teal-600"
+                  currentValue={rateDelta(ppcCtr)}
+                  previousValue={rateDelta(prevPpcCtr)}
+                  previousDisplayValue={ratePct(prevPpcCtr)}
+                  comparisonLabel={comparisonLabel}
+                  isPercentage={true}
                 />
               </div>
             </div>
