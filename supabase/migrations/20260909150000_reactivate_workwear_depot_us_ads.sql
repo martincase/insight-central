@@ -1,0 +1,56 @@
+-- Reactivate Amazon Ads collection for the Workwear Depot US seller account.
+--
+-- Background
+-- ----------
+-- Workwear Depot US (Kilronan Safety, selling partner A3R7FAYWFJZ8JU) went dark
+-- on 2026-07-03 when Windsor was sunset. Two independent feeds carried it and
+-- both stopped:
+--
+--   * ads   - perplexity_ppc_campaigns, profile "1450980085434729 - US",
+--             last row 2026-07-03
+--   * sales - perplexity_sales_data, account "A3R7FAYWFJZ8JU-US",
+--             last row 2026-07-02
+--
+-- Thirty-seven accounts were migrated to native SP-API and survived the sunset.
+-- Nine were not, and this is one of them.
+--
+-- Ads side (fixed here)
+-- ---------------------
+-- amazon-api-fetch-report selects profiles with .eq("active", true). This
+-- profile was active = false, so the Ads API pull skipped it even though our
+-- shared AMAZON_ADS_REFRESH_TOKEN can see it - amazon-api-fetch-profiles listed
+-- it again on 2026-09-09, so authorisation was never the problem.
+--
+-- amazon-api-fetch-profiles deliberately excludes `active` from MANAGED_COLS so
+-- activations survive the daily refresh, which makes this flag the intended
+-- switch and makes this change durable.
+--
+-- The weekly ads-reconcile-weekly-* waves call fn_ads_reconcile_wave(..., 95)
+-- with no profileId, so they run for every active profile. fn_ads_retention_start()
+-- is 2026-06-01, which predates the 2026-07-04 gap, so the next Sunday reconcile
+-- should backfill the whole outage rather than only collecting from today.
+--
+-- Only the US profile is enabled. Kilronan CA (1009510535614338) and MX
+-- (2834014777621650) exist but have no trading history in any feed, so they are
+-- deliberately left off.
+--
+-- Sales side (NOT fixed here - needs a human)
+-- -------------------------------------------
+-- brand_marketplaces already has Workwear Depot US (A3R7FAYWFJZ8JU, NA/US,
+-- enabled = true), but sp_api_credentials holds no row for that selling partner
+-- - only A3SSSDGOONKZCU (the UK arm). Without a refresh token the native
+-- SP-API sales/traffic sync cannot run, which is why this account never migrated
+-- off Windsor. Someone with admin on that Seller Central account must authorise
+-- the app through the spapi-oauth-callback flow. No SQL can substitute for that.
+--
+-- Until then the US arm has ad spend but no total sales, so ACoS will be
+-- available from the backfill onwards and TACoS will not.
+--
+-- Rollback
+-- --------
+--   update amazon_api_profiles set active = false where profile_id = 1450980085434729;
+
+update amazon_api_profiles
+set active = true
+where profile_id = 1450980085434729   -- Kilronan Safety / Workwear Depot, US
+  and account_id = 'A3R7FAYWFJZ8JU';
