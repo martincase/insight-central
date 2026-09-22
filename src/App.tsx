@@ -23,6 +23,15 @@ const ListingImages = React.lazy(() => import("./pages/ListingImages"));
 
 const NotFound = React.lazy(() => import("./pages/NotFound"));
 
+// Center Parcs Games: the family scoreboard ported from the Lovable "Orlando Game Hub"
+// project. Public like the share links, on its own cp_games_* tables and its own theme.
+const GamesLayout = React.lazy(() => import("./games/components/GamesLayout"));
+const GamesHome = React.lazy(() => import("./games/pages/GamesHome"));
+const GamesPlayers = React.lazy(() => import("./games/pages/Players"));
+const GamesNewEvent = React.lazy(() => import("./games/pages/NewEvent"));
+const GamesMiniGolf = React.lazy(() => import("./games/pages/MiniGolf"));
+const GamesLeaderboard = React.lazy(() => import("./games/pages/Leaderboard"));
+
 const queryClient = new QueryClient();
 
 const App = () => (
@@ -53,6 +62,15 @@ const App = () => (
             <Route path="/client/:accountId/:token" element={<ClientView />} />
             <Route path="/roadmap" element={<PublicRoadmap />} />
             <Route path="/demo" element={<DemoView />} />
+
+            {/* Center Parcs Games. Static segments, so these outrank /:brandName/:shareId. */}
+            <Route path="/games" element={<GamesLayout />}>
+              <Route index element={<GamesHome />} />
+              <Route path="players" element={<GamesPlayers />} />
+              <Route path="new-event" element={<GamesNewEvent />} />
+              <Route path="mini-golf" element={<GamesMiniGolf />} />
+              <Route path="leaderboard" element={<GamesLeaderboard />} />
+            </Route>
             
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
