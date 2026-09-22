@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { MessageSquarePlus, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
+import { useLocation } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import { GAMES_BRAND } from "@/games/brand";
 
 const CONFIG = {
   app: "insight-central",
@@ -22,6 +24,7 @@ export function FeedbackWidget() {
   const [includeShot, setIncludeShot] = useState(true);
   const [message, setMessage] = useState("");
   const [category, setCategory] = useState<Category>("Bug");
+  const routeLocation = useLocation();
 
   useEffect(() => setMounted(true), []);
   useEffect(() => {
@@ -32,6 +35,8 @@ export function FeedbackWidget() {
   }, [shot]);
 
   if (!mounted) return null;
+  // The games are a family scoreboard, not a dashboard: no feedback button there.
+  if (routeLocation.pathname.startsWith(GAMES_BRAND.basePath)) return null;
 
   const reset = () => {
     setOpen(false);

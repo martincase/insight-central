@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Center Parcs Games 2026">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e8f3ea"/>
+      <stop offset="1" stop-color="#bfe0c6"/>
+    </linearGradient>
+    <linearGradient id="lake" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7cc1d8"/>
+      <stop offset="1" stop-color="#3f8fb0"/>
+    </linearGradient>
+    <clipPath id="disc"><circle cx="128" cy="128" r="104"/></clipPath>
+    <path id="arcTop" d="M 20 128 A 108 108 0 0 1 236 128"/>
+    <path id="arcBottom" d="M 6 128 A 122 122 0 0 0 250 128"/>
+  </defs>
+
+  <!-- outer ring -->
+  <circle cx="128" cy="128" r="124" fill="#1f5b34"/>
+  <circle cx="128" cy="128" r="105.5" fill="none" stroke="#f3e6b5" stroke-width="1.5"/>
+  <circle cx="128" cy="128" r="104" fill="url(#sky)"/>
+
+  <!-- scene -->
+  <g clip-path="url(#disc)">
+    <!-- far hills -->
+    <ellipse cx="90" cy="150" rx="110" ry="42" fill="#4f8f5e"/>
+    <ellipse cx="180" cy="156" rx="100" ry="40" fill="#3f7a4d"/>
+    <!-- lake -->
+    <ellipse cx="128" cy="192" rx="120" ry="34" fill="url(#lake)"/>
+    <path d="M60 196 q20 -6 40 0 t40 0 t40 0" fill="none" stroke="#dff2f7" stroke-width="2" opacity="0.7"/>
+    <path d="M80 208 q20 -6 40 0 t40 0" fill="none" stroke="#dff2f7" stroke-width="2" opacity="0.5"/>
+    <!-- pines -->
+    <g fill="#1f5b34">
+      <path d="M52 168 l22 -46 l22 46 z M56 150 l18 -38 l18 38 z M60 132 l14 -30 l14 30 z"/>
+      <rect x="71" y="166" width="6" height="14" fill="#5a3a1e"/>
+      <path d="M100 166 l26 -60 l26 60 z M105 142 l21 -48 l21 48 z M110 120 l16 -34 l16 34 z"/>
+      <rect x="123" y="164" width="7" height="18" fill="#5a3a1e"/>
+      <path d="M160 168 l22 -46 l22 46 z M164 150 l18 -38 l18 38 z M168 132 l14 -30 l14 30 z"/>
+      <rect x="179" y="166" width="6" height="14" fill="#5a3a1e"/>
+    </g>
+    <!-- sun -->
+    <circle cx="176" cy="74" r="14" fill="#f5c542"/>
+  </g>
+
+  <!-- trophy -->
+  <g transform="translate(128 118)">
+    <path d="M-16 -22 h32 v16 a16 16 0 0 1 -32 0 z" fill="#f5c542" stroke="#b8891a" stroke-width="2"/>
+    <path d="M-16 -18 h-8 a8 8 0 0 0 8 12 M16 -18 h8 a8 8 0 0 1 -8 12" fill="none" stroke="#b8891a" stroke-width="2.5"/>
+    <rect x="-4" y="10" width="8" height="8" fill="#b8891a"/>
+    <rect x="-12" y="18" width="24" height="5" rx="1" fill="#b8891a"/>
+  </g>
+
+  <!-- text -->
+  <text font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-weight="700" font-size="17" fill="#f3e6b5" letter-spacing="2.5">
+    <textPath href="#arcTop" startOffset="50%" text-anchor="middle">CENTER PARCS GAMES</textPath>
+  </text>
+  <text font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-weight="700" font-size="17" fill="#f3e6b5" letter-spacing="4">
+    <textPath href="#arcBottom" startOffset="50%" text-anchor="middle">★ 2026 ★</textPath>
+  </text>
+</svg>

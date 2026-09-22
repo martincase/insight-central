@@ -1,0 +1,46 @@
+/* Center Parcs Games theme.
+   Scoped to .cp-games so the shadcn colour tokens are overridden only inside the games
+   pages, and Insight Central's own palette is untouched. Forest green primary, warm
+   amber accent for medals, soft sky-green background. */
+.cp-games {
+  --background: 120 30% 97%;
+  --foreground: 150 30% 12%;
+
+  --card: 0 0% 100%;
+  --card-foreground: 150 30% 12%;
+
+  --popover: 0 0% 100%;
+  --popover-foreground: 150 30% 12%;
+
+  --primary: 146 50% 25%;
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 40 90% 50%;
+  --secondary-foreground: 30 40% 12%;
+
+  --muted: 120 20% 93%;
+  --muted-foreground: 150 12% 42%;
+
+  --accent: 197 55% 42%;
+  --accent-foreground: 0 0% 100%;
+
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+
+  --border: 140 20% 86%;
+  --input: 140 20% 86%;
+  --ring: 146 50% 25%;
+
+  --radius: 0.75rem;
+
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+/* The bottom nav is fixed and 4rem tall. Toasts default to the bottom corner and sit
+   on top of it for a few seconds after every save, blocking the next tap on a phone.
+   Sonner positions from these two custom properties, so lift them above the nav. */
+body.cp-games-active [data-sonner-toaster][data-y-position="bottom"] {
+  --offset: 5.25rem !important;
+  --mobile-offset: 5.25rem !important;
+}
