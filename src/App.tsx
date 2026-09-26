@@ -12,7 +12,6 @@ import FeedbackWidget from "@/components/FeedbackWidget";
 const Index = React.lazy(() => import("./pages/Index"));
 const CampaignDrilldown = React.lazy(() => import("./pages/CampaignDrilldown"));
 const SharedView = React.lazy(() => import("./pages/SharedView"));
-const ClientView = React.lazy(() => import("./pages/ClientView"));
 const AdminView = React.lazy(() => import("./pages/AdminView"));
 const PublicRoadmap = React.lazy(() => import("./pages/PublicRoadmap"));
 const DemoView = React.lazy(() => import("./pages/DemoView"));
@@ -59,7 +58,6 @@ const App = () => (
             {/* Deliberately public: client share links, the demo and the roadmap. */}
             <Route path="/share/:shareId" element={<SharedView />} />
             <Route path="/:brandName/:shareId" element={<SharedView />} />
-            <Route path="/client/:accountId/:token" element={<ClientView />} />
             <Route path="/roadmap" element={<PublicRoadmap />} />
             <Route path="/demo" element={<DemoView />} />
 

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { getCurrencyFromMerchantToken } from '@/utils/currencyUtils';
+import { formatMoney } from '@/utils/formatters';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
