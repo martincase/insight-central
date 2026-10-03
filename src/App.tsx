@@ -8,28 +8,29 @@ import { AuthGate } from "@/components/AuthGate";
 import { ASINDetailModal } from "@/components/dashboard/ASINDetailModal";
 import { AuthProvider } from "@/hooks/useAuth";
 import FeedbackWidget from "@/components/FeedbackWidget";
+import { lazyWithRetry } from "@/lib/lazyWithRetry";
 
-const Index = React.lazy(() => import("./pages/Index"));
-const CampaignDrilldown = React.lazy(() => import("./pages/CampaignDrilldown"));
-const SharedView = React.lazy(() => import("./pages/SharedView"));
-const AdminView = React.lazy(() => import("./pages/AdminView"));
-const PublicRoadmap = React.lazy(() => import("./pages/PublicRoadmap"));
-const DemoView = React.lazy(() => import("./pages/DemoView"));
-const ASINHub = React.lazy(() => import("./pages/ASINHub"));
-const AgencyView = React.lazy(() => import("./pages/AgencyView"));
-const FeedbackAdmin = React.lazy(() => import("./pages/FeedbackAdmin"));
-const ListingImages = React.lazy(() => import("./pages/ListingImages"));
+const Index = lazyWithRetry(() => import("./pages/Index"));
+const CampaignDrilldown = lazyWithRetry(() => import("./pages/CampaignDrilldown"));
+const SharedView = lazyWithRetry(() => import("./pages/SharedView"));
+const AdminView = lazyWithRetry(() => import("./pages/AdminView"));
+const PublicRoadmap = lazyWithRetry(() => import("./pages/PublicRoadmap"));
+const DemoView = lazyWithRetry(() => import("./pages/DemoView"));
+const ASINHub = lazyWithRetry(() => import("./pages/ASINHub"));
+const AgencyView = lazyWithRetry(() => import("./pages/AgencyView"));
+const FeedbackAdmin = lazyWithRetry(() => import("./pages/FeedbackAdmin"));
+const ListingImages = lazyWithRetry(() => import("./pages/ListingImages"));
 
-const NotFound = React.lazy(() => import("./pages/NotFound"));
+const NotFound = lazyWithRetry(() => import("./pages/NotFound"));
 
 // Center Parcs Games: the family scoreboard ported from the Lovable "Orlando Game Hub"
 // project. Public like the share links, on its own cp_games_* tables and its own theme.
-const GamesLayout = React.lazy(() => import("./games/components/GamesLayout"));
-const GamesHome = React.lazy(() => import("./games/pages/GamesHome"));
-const GamesPlayers = React.lazy(() => import("./games/pages/Players"));
-const GamesNewEvent = React.lazy(() => import("./games/pages/NewEvent"));
-const GamesMiniGolf = React.lazy(() => import("./games/pages/MiniGolf"));
-const GamesLeaderboard = React.lazy(() => import("./games/pages/Leaderboard"));
+const GamesLayout = lazyWithRetry(() => import("./games/components/GamesLayout"));
+const GamesHome = lazyWithRetry(() => import("./games/pages/GamesHome"));
+const GamesPlayers = lazyWithRetry(() => import("./games/pages/Players"));
+const GamesNewEvent = lazyWithRetry(() => import("./games/pages/NewEvent"));
+const GamesMiniGolf = lazyWithRetry(() => import("./games/pages/MiniGolf"));
+const GamesLeaderboard = lazyWithRetry(() => import("./games/pages/Leaderboard"));
 
 const queryClient = new QueryClient();
 
