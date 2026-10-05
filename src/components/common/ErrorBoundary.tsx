@@ -2,6 +2,8 @@ import React from 'react';
 
 interface ErrorBoundaryProps {
   fallback?: React.ReactNode;
+  /** Set false to hide the raw error message, e.g. on a client-facing boundary. */
+  showErrorDetail?: boolean;
   children: React.ReactNode;
 }
 
@@ -30,9 +32,11 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
         return (
           <div>
             {this.props.fallback}
-            <div className="text-xs text-muted-foreground mt-2 font-mono">
-              Error: {this.state.lastError?.message || String(this.state.lastError)}
-            </div>
+            {this.props.showErrorDetail !== false && (
+              <div className="text-xs text-muted-foreground mt-2 font-mono">
+                Error: {this.state.lastError?.message || String(this.state.lastError)}
+              </div>
+            )}
           </div>
         );
       }

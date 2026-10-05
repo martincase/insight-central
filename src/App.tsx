@@ -9,6 +9,7 @@ import { ASINDetailModal } from "@/components/dashboard/ASINDetailModal";
 import { AuthProvider } from "@/hooks/useAuth";
 import FeedbackWidget from "@/components/FeedbackWidget";
 import { lazyWithRetry } from "@/lib/lazyWithRetry";
+import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 
 const Index = lazyWithRetry(() => import("./pages/Index"));
 const CampaignDrilldown = lazyWithRetry(() => import("./pages/CampaignDrilldown"));
@@ -34,6 +35,36 @@ const GamesLeaderboard = lazyWithRetry(() => import("./games/pages/Leaderboard")
 
 const queryClient = new QueryClient();
 
+// Nothing wrapped the routed page itself: an unhandled render-time error (not
+// a data-fetch error, which pages already catch) unmounted the whole React
+// tree and left a blank white screen with no way back short of a manual
+// reload. This boundary is the backstop for that failure mode.
+const RouteCrashFallback = (
+  <div className="min-h-screen bg-gradient-to-br from-blue-50 to-cyan-50 p-8">
+    <div className="max-w-4xl mx-auto">
+      <div className="bg-white p-8 rounded-lg shadow">
+        <h1 className="text-2xl font-bold mb-4 text-gray-900">Something went wrong</h1>
+        <p className="mb-4 text-gray-700">
+          This page hit an unexpected error. Reloading usually fixes it.
+        </p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+        >
+          Reload
+        </button>
+        <p className="mt-4 text-sm text-gray-500">
+          If this keeps happening, contact us at{' '}
+          <a href="mailto:hello@martincase.co.uk" className="text-blue-600 hover:text-blue-800 underline">
+            hello@martincase.co.uk
+          </a>.
+        </p>
+      </div>
+    </div>
+  </div>
+);
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <AuthProvider>
@@ -42,6 +73,7 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <React.Suspense fallback={<div className="flex items-center justify-center min-h-screen"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div></div>}>
+        <ErrorBoundary fallback={RouteCrashFallback} showErrorDetail={false}>
           <Routes>
             {/* Staff routes. AuthGate here rather than inside each page so a new staff
                 route cannot be added unprotected by accident. /admin and /agency are ALSO
@@ -74,6 +106,7 @@ const App = () => (
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>
+        </ErrorBoundary>
         </React.Suspense>
         <ASINDetailModal />
         <FeedbackWidget />
